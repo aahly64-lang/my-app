@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "יומן ושולחן עבודה",
+    "slug": "my-personal-board-apk",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "android": {
+      "package": "com.avi.personalboard",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM"
+      ]
+    }
+  }
+}
