@@ -1,0 +1,57 @@
+import { Alert } from 'react-native';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
+import { AlarmArea, MuscleCategory, StickyNote, localDateString } from './storage';
+
+export interface BackupData {
+  notes: StickyNote[];
+  categories: MuscleCategory[];
+  areas: AlarmArea[];
+}
+
+const BACKUP_APP_ID = 'avi-personal-board';
+
+export async function exportBackup(data: BackupData): Promise<void> {
+  const payload = {
+    app: BACKUP_APP_ID,
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    ...data,
+  };
+  const fileUri = `${FileSystem.cacheDirectory}board-backup-${localDateString()}.json`;
+  await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(payload, null, 2));
+  if (!(await Sharing.isAvailableAsync())) {
+    Alert.alert('שיתוף לא זמין', 'לא ניתן לשתף קבצים במכשיר הזה.');
+    return;
+  }
+  await Sharing.shareAsync(fileUri, {
+    mimeType: 'application/json',
+    dialogTitle: 'שמור או שלח את קובץ הגיבוי',
+  });
+}
+
+export async function pickBackup(): Promise<BackupData | null> {
+  try {
+    const res = await DocumentPicker.getDocumentAsync({
+      type: ['application/json', 'text/plain', '*/*'],
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+    if (res.canceled || !res.assets?.length) return null;
+    const raw = await FileSystem.readAsStringAsync(res.assets[0].uri);
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.app !== BACKUP_APP_ID) {
+      Alert.alert('קובץ לא מתאים', 'זה לא קובץ גיבוי של האפליקציה הזו.');
+      return null;
+    }
+    return {
+      notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+      categories: Array.isArray(parsed.categories) ? parsed.categories : [],
+      areas: Array.isArray(parsed.areas) ? parsed.areas : [],
+    };
+  } catch {
+    Alert.alert('השחזור נכשל', 'לא הצלחתי לקרוא את קובץ הגיבוי.');
+    return null;
+  }
+}

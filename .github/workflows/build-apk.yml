@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,8 +27,20 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate icons
+        run: |
+          pip install pillow
+          python scripts/gen-icons.py
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+
+      - name: Check TypeScript
+        run: npx tsc --noEmit
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install
@@ -48,4 +64,5 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: Build ${{ github.run_number }}
+          make_latest: true
           files: personal-board.apk

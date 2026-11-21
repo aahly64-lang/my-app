@@ -2,16 +2,61 @@
   "expo": {
     "name": "יומן ושולחן עבודה",
     "slug": "my-personal-board-apk",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#EFECE4"
+    },
+    "extra": {
+      "supportsRTL": true,
+      "forcesRTL": true
+    },
     "android": {
       "package": "com.avi.personalboard",
+      "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F172A"
+      },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
         "POST_NOTIFICATIONS",
-        "SCHEDULE_EXACT_ALARM"
+        "SCHEDULE_EXACT_ALARM",
+        "USE_FULL_SCREEN_INTENT",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ],
+      "intentFilters": [
+        {
+          "action": "SEND",
+          "category": ["DEFAULT"],
+          "data": [{ "mimeType": "text/plain" }]
+        }
       ]
-    }
+    },
+    "plugins": [
+      "expo-localization",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#CA8A04"
+        }
+      ]
+    ]
   }
 }
