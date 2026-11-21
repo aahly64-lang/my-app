@@ -52,7 +52,7 @@ object RingtoneMaker {
   // ---------------------------------------------------------------- trimming
 
   /** Cuts and re-encodes. Returns the output file. */
-  fun trim(src: String, startMs: Long, endMs: Long, fadeMs: Long, out: File) {
+  fun trim(src: String, startMs: Long, endMs: Long, fadeMs: Long, fadeOutMs: Long, out: File) {
     val startUs = startMs * 1000
     val endUs = endMs * 1000
     val extractor = MediaExtractor()
@@ -185,7 +185,9 @@ object RingtoneMaker {
           data.position(data.position() + bytesPerSample * inCh)
           continue
         }
-        val gain = if (fadeMs > 0) ((t - startUs).toDouble() / (fadeMs * 1000.0)).coerceIn(0.0, 1.0) else 1.0
+        val gIn = if (fadeMs > 0) ((t - startUs).toDouble() / (fadeMs * 1000.0)).coerceIn(0.0, 1.0) else 1.0
+        val gOut = if (fadeOutMs > 0) ((endUs - t).toDouble() / (fadeOutMs * 1000.0)).coerceIn(0.0, 1.0) else 1.0
+        val gain = minOf(gIn, gOut)
         for (c in 0 until inCh) {
           val v: Int = if (floatPcm) (data.float * 32767f).toInt() else data.short.toInt()
           if (c < outCh) outBuf.putShort((v * gain).toInt().coerceIn(-32768, 32767).toShort())
@@ -259,6 +261,97 @@ object RingtoneMaker {
       try { if (muxStarted) muxer?.stop() } catch (_: Exception) {}
       try { muxer?.release() } catch (_: Exception) {}
     }
+  }
+
+  /**
+   * Peak level (0..1) of [buckets] equal slices of the whole file, for drawing a waveform.
+   */
+  fun waveform(src: String, buckets: Int, durationMs: Long): FloatArray {
+    val peaks = FloatArray(buckets)
+    if (durationMs <= 0) return peaks
+    val durUs = durationMs * 1000.0
+    val extractor = MediaExtractor()
+    extractor.setDataSource(localPath(src))
+    var trackIndex = -1
+    var fmt: MediaFormat? = null
+    for (i in 0 until extractor.trackCount) {
+      val f = extractor.getTrackFormat(i)
+      if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
+        trackIndex = i
+        fmt = f
+        break
+      }
+    }
+    if (trackIndex < 0 || fmt == null) {
+      extractor.release()
+      return peaks
+    }
+    extractor.selectTrack(trackIndex)
+    val decoder = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
+    decoder.configure(fmt, null, null, 0)
+    decoder.start()
+    var sampleRate = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+    var channels = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+    var floatPcm = false
+    val info = MediaCodec.BufferInfo()
+    var inputDone = false
+    var outputDone = false
+    try {
+      while (!outputDone) {
+        if (!inputDone) {
+          val idx = decoder.dequeueInputBuffer(TIMEOUT_US)
+          if (idx >= 0) {
+            val buf = decoder.getInputBuffer(idx)!!
+            val n = extractor.readSampleData(buf, 0)
+            if (n < 0) {
+              decoder.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+              inputDone = true
+            } else {
+              decoder.queueInputBuffer(idx, 0, n, extractor.sampleTime, 0)
+              extractor.advance()
+            }
+          }
+        }
+        val o = decoder.dequeueOutputBuffer(info, TIMEOUT_US)
+        if (o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+          val f = decoder.outputFormat
+          if (f.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sampleRate = f.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+          if (f.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = f.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+          if (Build.VERSION.SDK_INT >= 24 && f.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+            floatPcm = f.getInteger(MediaFormat.KEY_PCM_ENCODING) == AudioFormat.ENCODING_PCM_FLOAT
+          }
+        } else if (o >= 0) {
+          if (info.size > 0) {
+            val buf = decoder.getOutputBuffer(o)!!
+            buf.position(info.offset)
+            buf.limit(info.offset + info.size)
+            val data = buf.slice().order(ByteOrder.nativeOrder())
+            val bps = if (floatPcm) 4 else 2
+            val frameBytes = bps * channels
+            val frames = info.size / frameBytes
+            // every 8th frame is plenty for a picture
+            var f = 0
+            while (f < frames) {
+              val pos = f * frameBytes
+              val v = if (floatPcm) Math.abs(data.getFloat(pos)) else Math.abs(data.getShort(pos).toInt()) / 32768f
+              val t = info.presentationTimeUs + f * 1_000_000L / sampleRate
+              val b = ((t / durUs) * buckets).toInt().coerceIn(0, buckets - 1)
+              if (v > peaks[b]) peaks[b] = v
+              f += 8
+            }
+          }
+          if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+          decoder.releaseOutputBuffer(o, false)
+        }
+      }
+    } finally {
+      try { decoder.stop() } catch (_: Exception) {}
+      try { decoder.release() } catch (_: Exception) {}
+      try { extractor.release() } catch (_: Exception) {}
+    }
+    val max = peaks.maxOrNull() ?: 0f
+    if (max > 0f) for (i in peaks.indices) peaks[i] = (peaks[i] / max).coerceIn(0f, 1f)
+    return peaks
   }
 
   // ---------------------------------------------------------------- phone ringtones
@@ -340,14 +433,17 @@ object RingtoneMaker {
   private var stopAt = 0L
   private var fadeAt = 0L
   private var fadeLen = 0L
+  private var fadeOutLen = 0L
 
   private val ticker = object : Runnable {
     override fun run() {
       val p = player ?: return
       try {
         val pos = p.currentPosition.toLong()
-        if (fadeLen > 0) {
-          val g = ((pos - fadeAt).toFloat() / fadeLen).coerceIn(0f, 1f)
+        if (fadeLen > 0 || fadeOutLen > 0) {
+          val gIn = if (fadeLen > 0) ((pos - fadeAt).toFloat() / fadeLen).coerceIn(0f, 1f) else 1f
+          val gOut = if (fadeOutLen > 0) ((stopAt - pos).toFloat() / fadeOutLen).coerceIn(0f, 1f) else 1f
+          val g = minOf(gIn, gOut)
           p.setVolume(g, g)
         }
         if (pos >= stopAt || !p.isPlaying) {
@@ -358,11 +454,11 @@ object RingtoneMaker {
         stopPreview()
         return
       }
-      handler.postDelayed(this, 50)
+      handler.postDelayed(this, 40)
     }
   }
 
-  fun preview(ctx: Context, src: String, startMs: Long, endMs: Long, fadeMs: Long) {
+  fun preview(ctx: Context, src: String, startMs: Long, endMs: Long, fadeMs: Long, fadeOutMs: Long) {
     stopPreview()
     val p = MediaPlayer()
     if (src.startsWith("content://")) p.setDataSource(ctx, Uri.parse(src)) else p.setDataSource(localPath(src))
@@ -371,6 +467,7 @@ object RingtoneMaker {
     stopAt = endMs
     fadeAt = startMs
     fadeLen = fadeMs
+    fadeOutLen = fadeOutMs
     if (fadeMs > 0) p.setVolume(0f, 0f)
     p.start()
     player = p

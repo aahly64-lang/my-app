@@ -51,17 +51,19 @@ type GeoAlarmNative = {
   openAppSettings(): void;
   getInitialSharedText(): string | null;
   audioDuration(src: string): number;
+  audioWaveform(src: string, buckets: number): Promise<number[]>;
   makeRingtone(
     src: string,
     startMs: number,
     endMs: number,
     fadeMs: number,
+    fadeOutMs: number,
     id: string,
     name: string
   ): Promise<{ path: string; mediaUri: string | null }>;
   renameRingtone(mediaUri: string | null, name: string): void;
   deleteRingtone(path: string | null, mediaUri: string | null): void;
-  previewAudio(src: string, startMs: number, endMs: number, fadeMs: number): void;
+  previewAudio(src: string, startMs: number, endMs: number, fadeMs: number, fadeOutMs: number): void;
   previewPosition(): number;
   stopPreview(): void;
   canWriteSettings(): boolean;
@@ -117,16 +119,31 @@ export const GeoAlarm = {
   getInitialSharedText: () => safe(() => native!.getInitialSharedText(), null),
   audioDuration: (src: string) => safe(() => native!.audioDuration(src), 0),
   /** Cuts [startMs,endMs] with optional fade-in; throws a Hebrew message on failure. */
-  makeRingtone: (src: string, startMs: number, endMs: number, fadeMs: number, id: string, name: string) => {
+  audioWaveform: async (src: string, buckets: number): Promise<number[] | null> => {
+    try {
+      return native ? await native.audioWaveform(src, buckets) : null;
+    } catch {
+      return null;
+    }
+  },
+  makeRingtone: (
+    src: string,
+    startMs: number,
+    endMs: number,
+    fadeMs: number,
+    fadeOutMs: number,
+    id: string,
+    name: string
+  ) => {
     if (!native) return Promise.reject(new Error('לא זמין במכשיר הזה'));
-    return native.makeRingtone(src, startMs, endMs, fadeMs, id, name);
+    return native.makeRingtone(src, startMs, endMs, fadeMs, fadeOutMs, id, name);
   },
   renameRingtone: (mediaUri: string | null, name: string) => safe(() => native!.renameRingtone(mediaUri, name), undefined),
   deleteRingtone: (path: string | null, mediaUri: string | null) =>
     safe(() => native!.deleteRingtone(path, mediaUri), undefined),
-  previewAudio: (src: string, startMs: number, endMs: number, fadeMs: number) =>
+  previewAudio: (src: string, startMs: number, endMs: number, fadeMs: number, fadeOutMs = 0) =>
     safe(() => {
-      native!.previewAudio(src, startMs, endMs, fadeMs);
+      native!.previewAudio(src, startMs, endMs, fadeMs, fadeOutMs);
       return true;
     }, false),
   previewPosition: () => safe(() => native!.previewPosition(), -1),

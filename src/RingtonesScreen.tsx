@@ -5,14 +5,13 @@ import {
   AppState,
   LayoutChangeEvent,
   Modal,
-  PanResponder,
-  ScrollView,
   Switch,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView, ScrollView } from 'react-native-gesture-handler';
 import * as DocumentPicker from 'expo-document-picker';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { Palette, cardShadow, useTheme, useThemedStyles } from './theme';
@@ -27,9 +26,16 @@ import {
   saveSounds,
 } from './storage';
 
-const MAX_MS = 40_000;
+const DEFAULT_MAX_MS = 40_000;
 const MIN_MS = 1_000;
-const FADE_MS = 2_000;
+const WAVE_BUCKETS = 1500;
+const MAX_CHOICES: [number, string][] = [
+  [30_000, '30 שנ\''],
+  [40_000, '40 שנ\''],
+  [60_000, 'דקה'],
+  [120_000, '2 דק\''],
+  [Number.MAX_SAFE_INTEGER, 'ללא הגבלה'],
+];
 
 const KINDS: [SoundKind, string][] = [
   ['alarm', '⏰ שעון מעורר'],
@@ -51,8 +57,15 @@ interface Draft {
   duration: number;
   start: number;
   end: number;
-  fade: boolean;
+  maxMs: number;
+  fadeIn: boolean;
+  fadeInSec: number;
+  fadeOut: boolean;
+  fadeOutSec: number;
 }
+
+const fadeInMs = (d: Draft) => (d.fadeIn ? d.fadeInSec * 1000 : 0);
+const fadeOutMs = (d: Draft) => (d.fadeOut ? d.fadeOutSec * 1000 : 0);
 
 interface Props {
   visible: boolean;
@@ -64,6 +77,7 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
   const styles = useThemedStyles(makeStyles);
   const [list, setList] = useState<MyRingtone[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [wave, setWave] = useState<number[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [playPos, setPlayPos] = useState(-1);
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -99,9 +113,9 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
 
   useEffect(() => () => stopPlay(), [stopPlay]);
 
-  const play = (src: string, start: number, end: number, fadeMs: number, id: string) => {
+  const play = (src: string, start: number, end: number, fadeMs: number, id: string, fadeOut = 0) => {
     stopPlay();
-    if (!GeoAlarm.previewAudio(src, start, end, fadeMs)) {
+    if (!GeoAlarm.previewAudio(src, start, end, fadeMs, fadeOut)) {
       Alert.alert('השמעה', 'לא הצלחתי להשמיע את הקובץ.');
       return;
     }
@@ -124,7 +138,21 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
       return;
     }
     const base = (a.name || 'צלצול').replace(/\.[^.]+$/, '').slice(0, 30);
-    setDraft({ src: a.uri, name: base, duration, start: 0, end: Math.min(30_000, duration), fade: true });
+    setWave(null);
+    setDraft({
+      src: a.uri,
+      name: base,
+      duration,
+      start: 0,
+      end: Math.min(30_000, duration),
+      maxMs: DEFAULT_MAX_MS,
+      fadeIn: true,
+      fadeInSec: 2,
+      fadeOut: false,
+      fadeOutSec: 2,
+    });
+    const w = await GeoAlarm.audioWaveform(a.uri, WAVE_BUCKETS);
+    setWave(w && w.some((x) => x > 0) ? w : []);
   };
 
   const save = async () => {
@@ -138,7 +166,8 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
         draft.src,
         Math.round(draft.start),
         Math.round(draft.end),
-        draft.fade ? FADE_MS : 0,
+        fadeInMs(draft),
+        fadeOutMs(draft),
         id,
         name
       );
@@ -234,7 +263,7 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={draft ? () => setDraft(null) : close}>
-      <View style={styles.screen}>
+      <GestureHandlerRootView style={styles.screen}>
         <View style={styles.header}>
           <Text style={styles.title}>🎵 הצלצולים שלי</Text>
           <TouchableOpacity onPress={draft ? () => setDraft(null) : close} style={styles.closeBtn} hitSlop={10}>
@@ -246,13 +275,14 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
           <Editor
             draft={draft}
             setDraft={setDraft}
+            wave={wave}
             busy={busy}
             playing={playingId === 'draft'}
             playPos={playingId === 'draft' ? playPos : -1}
             onPlay={() =>
               playingId === 'draft'
                 ? stopPlay()
-                : play(draft.src, draft.start, draft.end, draft.fade ? FADE_MS : 0, 'draft')
+                : play(draft.src, draft.start, draft.end, fadeInMs(draft), 'draft', fadeOutMs(draft))
             }
             onSave={save}
             styles={styles}
@@ -384,7 +414,7 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
             </>
           ) : null}
         </PopupShell>
-      </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -412,6 +442,7 @@ function MenuItem({
 function Editor({
   draft,
   setDraft,
+  wave,
   busy,
   playing,
   playPos,
@@ -422,6 +453,7 @@ function Editor({
 }: {
   draft: Draft;
   setDraft: (d: Draft) => void;
+  wave: number[] | null;
   busy: boolean;
   playing: boolean;
   playPos: number;
@@ -430,22 +462,66 @@ function Editor({
   styles: ReturnType<typeof makeStyles>;
   c: Palette;
 }) {
+  const [view, setView] = useState<{ from: number; to: number } | null>(null); // zoom window
+  const [editTime, setEditTime] = useState<'start' | 'end' | null>(null);
   const len = draft.end - draft.start;
+  const max = Math.min(draft.maxMs, draft.duration);
+  const from = view?.from ?? 0;
+  const to = view?.to ?? draft.duration;
 
-  const setStart = (v: number) => {
-    let start = Math.max(0, Math.min(v, draft.duration - MIN_MS));
-    let end = draft.end;
-    if (end - start < MIN_MS) end = Math.min(draft.duration, start + MIN_MS);
-    if (end - start > MAX_MS) end = start + MAX_MS;
-    setDraft({ ...draft, start, end });
+  // Keep the latest draft for gesture callbacks.
+  const ref = useRef(draft);
+  ref.current = draft;
+
+  const apply = (which: 'start' | 'end', v: number) => {
+    const d = ref.current;
+    const lim = Math.min(d.maxMs, d.duration);
+    let start = d.start;
+    let end = d.end;
+    if (which === 'start') {
+      start = Math.max(0, Math.min(v, d.duration - MIN_MS));
+      if (end - start < MIN_MS) end = Math.min(d.duration, start + MIN_MS);
+      if (end - start > lim) end = start + lim;
+    } else {
+      end = Math.min(d.duration, Math.max(v, MIN_MS));
+      if (end - start < MIN_MS) start = Math.max(0, end - MIN_MS);
+      if (end - start > lim) start = end - lim;
+    }
+    const next = { ...d, start, end };
+    ref.current = next;
+    setDraft(next);
   };
-  const setEnd = (v: number) => {
-    let end = Math.min(draft.duration, Math.max(v, MIN_MS));
-    let start = draft.start;
-    if (end - start < MIN_MS) start = Math.max(0, end - MIN_MS);
-    if (end - start > MAX_MS) start = end - MAX_MS;
-    setDraft({ ...draft, start, end });
+
+  const setMax = (m: number) => {
+    const d = { ...draft, maxMs: m };
+    if (d.end - d.start > m) d.end = d.start + m;
+    ref.current = d;
+    setDraft(d);
   };
+
+  const toggleZoom = () => {
+    if (view) {
+      setView(null);
+      return;
+    }
+    const pad = Math.max(1500, len * 0.25);
+    setView({ from: Math.max(0, draft.start - pad), to: Math.min(draft.duration, draft.end + pad) });
+  };
+
+  const fadeChips = (value: number, on: boolean, set: (n: number) => void) => (
+    <View style={styles.chipsRow}>
+      {[1, 2, 3].map((n) => (
+        <TouchableOpacity
+          key={n}
+          disabled={!on}
+          style={[styles.chip, n === value && on && styles.chipOn, !on && styles.dim]}
+          onPress={() => set(n)}
+        >
+          <Text style={[styles.chipText, n === value && on && styles.chipTextOn]}>{n} שנ'</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 
   return (
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -457,49 +533,88 @@ function Editor({
         placeholderTextColor={c.muted}
       />
 
-      <Text style={styles.label}>בחר קטע (עד 40 שניות)</Text>
-      <RangeBar
+      <View style={styles.waveHeader}>
+        <Text style={styles.label}>בחר קטע</Text>
+        <TouchableOpacity style={styles.zoomBtn} onPress={toggleZoom}>
+          <Text style={styles.zoomText}>{view ? '↔️ כל השיר' : '🔍 הגדל'}</Text>
+        </TouchableOpacity>
+      </View>
+      <Wave
+        wave={wave}
         duration={draft.duration}
+        from={from}
+        to={to}
         start={draft.start}
         end={draft.end}
+        fadeIn={fadeInMs(draft)}
+        fadeOut={fadeOutMs(draft)}
         playPos={playPos}
-        onStart={setStart}
-        onEnd={setEnd}
+        onMove={apply}
         styles={styles}
       />
       <View style={styles.timesRow}>
-        <Text style={styles.timeSmall}>0:00</Text>
-        <Text style={styles.timeSmall}>{fmt(draft.duration)}</Text>
+        <Text style={styles.timeSmall}>{fmt(from)}</Text>
+        <Text style={styles.timeSmall}>{fmt(to)}</Text>
       </View>
 
       <View style={styles.fineRow}>
         <Text style={styles.fineLabel}>🟢 התחלה</Text>
-        <TouchableOpacity style={styles.fineBtn} onPress={() => setStart(draft.start - 1000)}>
+        <TouchableOpacity style={styles.fineBtn} onPress={() => apply('start', draft.start - 1000)}>
           <Text style={styles.fineBtnText}>-1</Text>
         </TouchableOpacity>
-        <Text style={styles.fineTime}>{fmt(draft.start)}</Text>
-        <TouchableOpacity style={styles.fineBtn} onPress={() => setStart(draft.start + 1000)}>
+        <TouchableOpacity style={styles.timeBox} onPress={() => setEditTime('start')}>
+          <Text style={styles.fineTime}>{fmt(draft.start)}</Text>
+          <Text style={styles.timeEditHint}>✏️</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.fineBtn} onPress={() => apply('start', draft.start + 1000)}>
           <Text style={styles.fineBtnText}>+1</Text>
         </TouchableOpacity>
       </View>
       <View style={styles.fineRow}>
         <Text style={styles.fineLabel}>🔴 סוף</Text>
-        <TouchableOpacity style={styles.fineBtn} onPress={() => setEnd(draft.end - 1000)}>
+        <TouchableOpacity style={styles.fineBtn} onPress={() => apply('end', draft.end - 1000)}>
           <Text style={styles.fineBtnText}>-1</Text>
         </TouchableOpacity>
-        <Text style={styles.fineTime}>{fmt(draft.end)}</Text>
-        <TouchableOpacity style={styles.fineBtn} onPress={() => setEnd(draft.end + 1000)}>
+        <TouchableOpacity style={styles.timeBox} onPress={() => setEditTime('end')}>
+          <Text style={styles.fineTime}>{fmt(draft.end)}</Text>
+          <Text style={styles.timeEditHint}>✏️</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.fineBtn} onPress={() => apply('end', draft.end + 1000)}>
           <Text style={styles.fineBtnText}>+1</Text>
         </TouchableOpacity>
       </View>
-      <Text style={[styles.lenText, len >= MAX_MS - 50 && styles.lenMax]}>אורך הקטע: {fmt(len)} (מקסימום 0:40)</Text>
+
+      <Text style={[styles.lenText, len >= max - 50 && max < draft.duration && styles.lenMax]}>
+        אורך הקטע: {fmt(len)}
+      </Text>
+      <Text style={styles.label}>אורך מקסימלי</Text>
+      <View style={styles.chipsRow}>
+        {MAX_CHOICES.map(([ms, label]) => (
+          <TouchableOpacity
+            key={label}
+            style={[styles.chip, draft.maxMs === ms && styles.chipOn]}
+            onPress={() => setMax(ms)}
+          >
+            <Text style={[styles.chipText, draft.maxMs === ms && styles.chipTextOn]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
 
       <View style={styles.switchRow}>
         <View style={styles.flex1}>
           <Text style={styles.switchTitle}>כניסה הדרגתית</Text>
-          <Text style={styles.hintTight}>הצלצול מתחיל בשקט ומתגבר בשתי השניות הראשונות.</Text>
+          <Text style={styles.hintTight}>הצלצול מתחיל בשקט ומתגבר.</Text>
+          {fadeChips(draft.fadeInSec, draft.fadeIn, (n) => setDraft({ ...draft, fadeInSec: n }))}
         </View>
-        <Switch value={draft.fade} onValueChange={(v) => setDraft({ ...draft, fade: v })} />
+        <Switch value={draft.fadeIn} onValueChange={(v) => setDraft({ ...draft, fadeIn: v })} />
+      </View>
+      <View style={styles.switchRow}>
+        <View style={styles.flex1}>
+          <Text style={styles.switchTitle}>יציאה הדרגתית</Text>
+          <Text style={styles.hintTight}>הצלצול נחלש לאט בסוף הקטע.</Text>
+          {fadeChips(draft.fadeOutSec, draft.fadeOut, (n) => setDraft({ ...draft, fadeOutSec: n }))}
+        </View>
+        <Switch value={draft.fadeOut} onValueChange={(v) => setDraft({ ...draft, fadeOut: v })} />
       </View>
 
       <TouchableOpacity style={styles.outlineBtn} onPress={onPlay}>
@@ -508,77 +623,231 @@ function Editor({
       <TouchableOpacity style={[styles.bigBtn, busy && styles.dim]} onPress={onSave} disabled={busy}>
         {busy ? <ActivityIndicator color={c.onAccent} /> : <Text style={styles.bigBtnText}>💾 שמור צלצול</Text>}
       </TouchableOpacity>
+
+      <TimeEditor
+        which={editTime}
+        value={editTime === 'start' ? draft.start : draft.end}
+        onClose={() => setEditTime(null)}
+        onSave={(ms) => {
+          if (editTime) apply(editTime, ms);
+          setEditTime(null);
+        }}
+        styles={styles}
+        c={c}
+      />
     </ScrollView>
   );
 }
 
-function RangeBar({
+/** Popup to type a time as minutes : seconds . tenths */
+function TimeEditor({
+  which,
+  value,
+  onClose,
+  onSave,
+  styles,
+  c,
+}: {
+  which: 'start' | 'end' | null;
+  value: number;
+  onClose: () => void;
+  onSave: (ms: number) => void;
+  styles: ReturnType<typeof makeStyles>;
+  c: Palette;
+}) {
+  const [m, setM] = useState('0');
+  const [sec, setSec] = useState('0');
+  const [t, setT] = useState('0');
+  useEffect(() => {
+    if (!which) return;
+    const tenths = Math.round(value / 100);
+    setM(String(Math.floor(tenths / 600)));
+    setSec(String(Math.floor((tenths % 600) / 10)));
+    setT(String(tenths % 10));
+  }, [which, value]);
+
+  const num = (x: string) => Math.max(0, parseInt(x || '0', 10) || 0);
+  const total = () => num(m) * 60_000 + Math.min(59, num(sec)) * 1000 + Math.min(9, num(t)) * 100;
+  const bump = (field: 'm' | 's' | 't', d: number) => {
+    let ms = total();
+    ms += field === 'm' ? d * 60_000 : field === 's' ? d * 1000 : d * 100;
+    ms = Math.max(0, ms);
+    const tenths = Math.round(ms / 100);
+    setM(String(Math.floor(tenths / 600)));
+    setSec(String(Math.floor((tenths % 600) / 10)));
+    setT(String(tenths % 10));
+  };
+  const field = (label: string, v: string, set: (x: string) => void, f: 'm' | 's' | 't', w: number) => (
+    <View style={styles.tfCol}>
+      <TouchableOpacity style={styles.tfBump} onPress={() => bump(f, 1)}>
+        <Text style={styles.fineBtnText}>+</Text>
+      </TouchableOpacity>
+      <TextInput
+        style={[styles.tfInput, { width: w }]}
+        value={v}
+        onChangeText={(x) => set(x.replace(/[^0-9]/g, ''))}
+        keyboardType="number-pad"
+        maxLength={f === 't' ? 1 : 2}
+        selectTextOnFocus
+        placeholderTextColor={c.muted}
+      />
+      <TouchableOpacity style={styles.tfBump} onPress={() => bump(f, -1)}>
+        <Text style={styles.fineBtnText}>−</Text>
+      </TouchableOpacity>
+      <Text style={styles.tfLabel}>{label}</Text>
+    </View>
+  );
+
+  return (
+    <PopupShell visible={!!which} title={which === 'start' ? '🟢 זמן התחלה' : '🔴 זמן סוף'} onClose={onClose} yellow={false}>
+      <View style={styles.tfRow}>
+        {field('דקות', m, setM, 'm', 56)}
+        <Text style={styles.tfSep}>:</Text>
+        {field('שניות', sec, setSec, 's', 56)}
+        <Text style={styles.tfSep}>.</Text>
+        {field('עשיריות', t, setT, 't', 44)}
+      </View>
+      <TouchableOpacity style={styles.bigBtn} onPress={() => onSave(total())}>
+        <Text style={styles.bigBtnText}>אישור</Text>
+      </TouchableOpacity>
+    </PopupShell>
+  );
+}
+
+const WAVE_H = 96;
+const BAR_W = 3;
+const BAR_GAP = 1;
+
+function Wave({
+  wave,
   duration,
+  from,
+  to,
   start,
   end,
+  fadeIn,
+  fadeOut,
   playPos,
-  onStart,
-  onEnd,
+  onMove,
   styles,
 }: {
+  wave: number[] | null;
   duration: number;
+  from: number;
+  to: number;
   start: number;
   end: number;
+  fadeIn: number;
+  fadeOut: number;
   playPos: number;
-  onStart: (v: number) => void;
-  onEnd: (v: number) => void;
+  onMove: (which: 'start' | 'end', ms: number) => void;
   styles: ReturnType<typeof makeStyles>;
 }) {
   const [width, setWidth] = useState(1);
-  const latest = useRef({ start, end, width, duration, onStart, onEnd });
-  latest.current = { start, end, width, duration, onStart, onEnd };
-  const drag = useRef<{ which: 'start' | 'end'; baseMs: number } | null>(null);
+  const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
+  const span = Math.max(1, to - from);
+  const xOf = (ms: number) => ((ms - from) / span) * width;
 
-  const pan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: (e) => {
-        const L = latest.current;
-        const x = e.nativeEvent.locationX;
-        const sx = (L.start / L.duration) * L.width;
-        const ex = (L.end / L.duration) * L.width;
-        const which = Math.abs(x - sx) <= Math.abs(x - ex) ? 'start' : 'end';
-        const ms = (x / L.width) * L.duration;
-        drag.current = { which, baseMs: ms };
-        if (which === 'start') L.onStart(ms);
-        else L.onEnd(ms);
-      },
-      onPanResponderMove: (_e, g) => {
-        const L = latest.current;
-        const d = drag.current;
-        if (!d) return;
-        const ms = d.baseMs + (g.dx / L.width) * L.duration;
-        if (d.which === 'start') L.onStart(ms);
-        else L.onEnd(ms);
-      },
-      onPanResponderRelease: () => {
-        drag.current = null;
-      },
-    })
-  ).current;
+  // Gesture state lives in refs so the gestures can be created once.
+  const live = useRef({ start, end, width, span, onMove });
+  live.current = { start, end, width, span, onMove };
+  const base = useRef(0);
 
-  const sx = (start / duration) * width;
-  const ex = (end / duration) * width;
-  const px = playPos >= 0 ? (playPos / duration) * width : -1;
+  const makePan = (which: 'start' | 'end') =>
+    Gesture.Pan()
+      .runOnJS(true)
+      .minDistance(0)
+      .hitSlop({ horizontal: 14, vertical: 10 })
+      .onBegin(() => {
+        base.current = which === 'start' ? live.current.start : live.current.end;
+        setDragging(which);
+      })
+      .onUpdate((e) => {
+        const L = live.current;
+        L.onMove(which, base.current + (e.translationX / L.width) * L.span);
+      })
+      .onFinalize(() => setDragging(null));
+
+  const panStart = useRef(makePan('start')).current;
+  const panEnd = useRef(makePan('end')).current;
+
+  // Bars for the visible window
+  const bars = Math.max(10, Math.floor(width / (BAR_W + BAR_GAP)));
+  const heights: number[] = [];
+  if (wave && wave.length) {
+    for (let i = 0; i < bars; i++) {
+      const t0 = from + (i / bars) * span;
+      const t1 = from + ((i + 1) / bars) * span;
+      const b0 = Math.floor((t0 / duration) * wave.length);
+      const b1 = Math.max(b0 + 1, Math.ceil((t1 / duration) * wave.length));
+      let peak = 0;
+      for (let b = b0; b < b1 && b < wave.length; b++) if (wave[b] > peak) peak = wave[b];
+      heights.push(peak);
+    }
+  }
+
+  const sx = xOf(start);
+  const ex = xOf(end);
+  const px = playPos >= 0 ? xOf(playPos) : -1;
+
+  const gainAt = (t: number) => {
+    if (t < start || t > end) return 1;
+    const gi = fadeIn > 0 ? Math.min(1, (t - start) / fadeIn) : 1;
+    const go = fadeOut > 0 ? Math.min(1, (end - t) / fadeOut) : 1;
+    return Math.max(0.08, Math.min(gi, go));
+  };
 
   return (
-    <View
-      style={styles.rangeWrap}
-      onLayout={(e: LayoutChangeEvent) => setWidth(Math.max(1, e.nativeEvent.layout.width))}
-      {...pan.panHandlers}
-    >
-      <View pointerEvents="none" style={styles.rangeTrack} />
-      <View pointerEvents="none" style={[styles.rangeSel, { left: sx, width: Math.max(2, ex - sx) }]} />
-      {px >= 0 ? <View pointerEvents="none" style={[styles.playhead, { left: px - 1 }]} /> : null}
-      <View pointerEvents="none" style={[styles.thumb, styles.thumbStart, { left: sx - 14 }]} />
-      <View pointerEvents="none" style={[styles.thumb, styles.thumbEnd, { left: ex - 14 }]} />
+    <View style={styles.waveOuter}>
+      <View style={styles.waveBox} onLayout={(e: LayoutChangeEvent) => setWidth(Math.max(1, e.nativeEvent.layout.width))}>
+        {wave === null ? (
+          <View style={styles.waveLoading}>
+            <ActivityIndicator />
+            <Text style={styles.hintTight}>טוען גל קול…</Text>
+          </View>
+        ) : (
+          <View style={styles.barsRow} pointerEvents="none">
+            {(heights.length ? heights : new Array(bars).fill(0.25)).map((h, i) => {
+              const t = from + ((i + 0.5) / bars) * span;
+              const inSel = t >= start && t <= end;
+              const hh = Math.max(2, h * (WAVE_H - 8) * (inSel ? gainAt(t) : 1));
+              return <View key={i} style={[styles.bar, { height: hh }, inSel ? styles.barOn : styles.barOff]} />;
+            })}
+          </View>
+        )}
+        <View pointerEvents="none" style={[styles.selShade, { left: sx, width: Math.max(1, ex - sx) }]} />
+        {px >= 0 && px <= width ? <View pointerEvents="none" style={[styles.playhead, { left: px - 1 }]} /> : null}
+      </View>
+
+      {/* handles: a line over the wave and a grip below it */}
+      {sx >= -1 && sx <= width + 1 ? (
+        <GestureDetector gesture={panStart}>
+          <View style={[styles.handle, { left: sx - 22 }]}>
+            <View style={[styles.handleLine, styles.handleStart]} />
+            <View style={[styles.grip, styles.handleStart]}>
+              <Text style={styles.gripText}>⟷</Text>
+            </View>
+          </View>
+        </GestureDetector>
+      ) : null}
+      {ex >= -1 && ex <= width + 1 ? (
+        <GestureDetector gesture={panEnd}>
+          <View style={[styles.handle, { left: ex - 22 }]}>
+            <View style={[styles.handleLine, styles.handleEnd]} />
+            <View style={[styles.grip, styles.handleEnd]}>
+              <Text style={styles.gripText}>⟷</Text>
+            </View>
+          </View>
+        </GestureDetector>
+      ) : null}
+      {dragging ? (
+        <View
+          pointerEvents="none"
+          style={[styles.bubble, { left: Math.min(Math.max(0, (dragging === 'start' ? sx : ex) - 36), width - 72) }]}
+        >
+          <Text style={styles.bubbleText}>{fmt(dragging === 'start' ? start : end)}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -665,20 +934,74 @@ const makeStyles = (c: Palette) => ({
     color: c.text,
     textAlign: 'right' as const,
   },
-  rangeWrap: { height: 56, justifyContent: 'center' as const, direction: 'ltr' as const, marginHorizontal: 14 },
-  rangeTrack: { position: 'absolute' as const, left: 0, right: 0, height: 10, borderRadius: 5, backgroundColor: c.subtle2 },
-  rangeSel: { position: 'absolute' as const, height: 10, borderRadius: 5, backgroundColor: c.accent },
-  playhead: { position: 'absolute' as const, width: 2, height: 34, backgroundColor: c.text },
-  thumb: {
-    position: 'absolute' as const,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 3,
-    borderColor: c.card,
+  waveHeader: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const },
+  zoomBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: c.subtle, marginTop: 8 },
+  zoomText: { fontSize: 13.5, fontWeight: '700' as const, color: c.text },
+  waveOuter: { direction: 'ltr' as const, marginHorizontal: 22, marginTop: 34, height: WAVE_H + 44 },
+  waveBox: { height: WAVE_H, borderRadius: 12, backgroundColor: c.subtle, overflow: 'hidden' as const },
+  waveLoading: { flex: 1, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 6 },
+  barsRow: { flex: 1, flexDirection: 'row' as const, alignItems: 'center' as const },
+  bar: { width: BAR_W, marginRight: BAR_GAP, borderRadius: 2 },
+  barOn: { backgroundColor: c.accent },
+  barOff: { backgroundColor: c.border },
+  selShade: { position: 'absolute' as const, top: 0, bottom: 0, backgroundColor: c.accent, opacity: 0.12 },
+  playhead: { position: 'absolute' as const, top: 0, bottom: 0, width: 2, backgroundColor: c.text },
+  handle: { position: 'absolute' as const, top: 0, width: 44, height: WAVE_H + 40, alignItems: 'center' as const },
+  handleLine: { width: 3, height: WAVE_H, borderRadius: 2 },
+  grip: {
+    width: 40,
+    height: 34,
+    borderRadius: 10,
+    marginTop: 4,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
   },
-  thumbStart: { backgroundColor: '#2E9E5B' },
-  thumbEnd: { backgroundColor: '#E5484D' },
+  gripText: { color: '#FFFFFF', fontSize: 16, fontWeight: '900' as const },
+  handleStart: { backgroundColor: '#2E9E5B' },
+  handleEnd: { backgroundColor: '#E5484D' },
+  bubble: {
+    position: 'absolute' as const,
+    top: -32,
+    width: 72,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: c.primary,
+    alignItems: 'center' as const,
+  },
+  bubbleText: { color: c.onPrimary, fontWeight: '800' as const, fontSize: 14 },
+  timeBox: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.card,
+  },
+  timeEditHint: { fontSize: 12 },
+  chipsRow: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 6, marginTop: 6 },
+  chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: c.card, borderWidth: 1, borderColor: c.border },
+  chipOn: { backgroundColor: c.accent, borderColor: c.accent },
+  chipText: { fontSize: 13.5, color: c.text, fontWeight: '600' as const },
+  chipTextOn: { color: c.onAccent, fontWeight: '800' as const },
+  tfRow: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, direction: 'ltr' as const, gap: 6, marginVertical: 8 },
+  tfCol: { alignItems: 'center' as const, gap: 4 },
+  tfBump: { width: 44, height: 32, borderRadius: 8, backgroundColor: c.subtle, alignItems: 'center' as const, justifyContent: 'center' as const },
+  tfInput: {
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: c.border,
+    backgroundColor: c.card,
+    textAlign: 'center' as const,
+    fontSize: 22,
+    fontWeight: '700' as const,
+    color: c.text,
+  },
+  tfLabel: { fontSize: 12, color: c.muted },
+  tfSep: { fontSize: 26, fontWeight: '800' as const, color: c.text, marginBottom: 20 },
   timesRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, direction: 'ltr' as const },
   timeSmall: { fontSize: 11.5, color: c.muted },
   fineRow: { flexDirection: 'row' as const, alignItems: 'center' as const, marginTop: 10, gap: 10 },

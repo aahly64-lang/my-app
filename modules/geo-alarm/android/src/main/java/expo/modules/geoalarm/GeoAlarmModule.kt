@@ -101,11 +101,16 @@ class GeoAlarmModule : Module() {
       RingtoneMaker.durationMs(context, src).toDouble()
     }
 
-    AsyncFunction("makeRingtone") { src: String, startMs: Double, endMs: Double, fadeMs: Double, id: String, name: String ->
+    AsyncFunction("audioWaveform") { src: String, buckets: Int ->
+      val dur = RingtoneMaker.durationMs(context, src)
+      RingtoneMaker.waveform(src, buckets, dur).map { it.toDouble() }
+    }
+
+    AsyncFunction("makeRingtone") { src: String, startMs: Double, endMs: Double, fadeMs: Double, fadeOutMs: Double, id: String, name: String ->
       val dir = java.io.File(context.filesDir, "ringtones").apply { mkdirs() }
       val out = java.io.File(dir, "$id.m4a")
       if (out.exists()) out.delete()
-      RingtoneMaker.trim(src, startMs.toLong(), endMs.toLong(), fadeMs.toLong(), out)
+      RingtoneMaker.trim(src, startMs.toLong(), endMs.toLong(), fadeMs.toLong(), fadeOutMs.toLong(), out)
       val media = RingtoneMaker.publish(context, out, name)
       mapOf("path" to "file://" + out.absolutePath, "mediaUri" to media)
     }
@@ -120,8 +125,8 @@ class GeoAlarmModule : Module() {
       Unit
     }
 
-    Function("previewAudio") { src: String, startMs: Double, endMs: Double, fadeMs: Double ->
-      RingtoneMaker.preview(context, src, startMs.toLong(), endMs.toLong(), fadeMs.toLong())
+    Function("previewAudio") { src: String, startMs: Double, endMs: Double, fadeMs: Double, fadeOutMs: Double ->
+      RingtoneMaker.preview(context, src, startMs.toLong(), endMs.toLong(), fadeMs.toLong(), fadeOutMs.toLong())
       Unit
     }
 
