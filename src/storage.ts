@@ -107,6 +107,31 @@ export const loadAreaStates = async () =>
   (await readJson<Record<string, AreaRuntimeState>>(AREA_STATE_KEY)) ?? {};
 export const saveAreaStates = (s: Record<string, AreaRuntimeState>) => writeJson(AREA_STATE_KEY, s);
 
+// ---------- location log (last events, for troubleshooting) ----------
+
+export const GEO_LOG_KEY = '@avi_geo_log_v1';
+const GEO_LOG_MAX = 50;
+
+export interface GeoLogEntry {
+  at: number;
+  label: string;
+  /** What happened: enter / exit / start (position checked when saving) / problem. */
+  kind: 'enter' | 'exit' | 'start' | 'problem';
+  /** Short Hebrew explanation of the outcome. */
+  text: string;
+  ok?: boolean;
+}
+
+export const loadGeoLog = async () => (await readJson<GeoLogEntry[]>(GEO_LOG_KEY)) ?? [];
+export const clearGeoLog = () => writeJson(GEO_LOG_KEY, []);
+export async function addGeoLog(e: Omit<GeoLogEntry, 'at'>) {
+  const list = await loadGeoLog();
+  const last = list[0];
+  if (last && last.text === e.text && last.label === e.label && Date.now() - last.at < 60 * 60 * 1000) return;
+  list.unshift({ ...e, at: Date.now() });
+  await writeJson(GEO_LOG_KEY, list.slice(0, GEO_LOG_MAX));
+}
+
 export const loadTimer = () => readJson<TimerState>(TIMER_KEY);
 export const saveTimer = (t: TimerState) => writeJson(TIMER_KEY, t);
 

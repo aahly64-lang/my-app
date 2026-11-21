@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   AppState,
+  Linking,
   SafeAreaView,
   ScrollView,
   Share,
@@ -13,7 +14,6 @@ import {
   useColorScheme,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
@@ -42,6 +42,9 @@ import {
   untilText,
 } from './src/rings';
 import {
+  GeoLogEntry,
+  clearGeoLog,
+  loadGeoLog,
   AlarmArea,
   AlarmClock,
   AreaMode,
@@ -78,25 +81,12 @@ import {
 type MainTab = 'notes' | 'tasks' | 'workouts' | 'alarms' | 'docs';
 
 const TABS: [MainTab, string, string][] = [
-  ['notes', 'file-text', 'פתקים'],
-  ['tasks', 'check-square', 'משימות'],
-  ['workouts', 'dumbbell', 'כושר'],
-  ['alarms', 'clock', 'שעונים'],
-  ['docs', 'folder', 'מסמכים'],
+  ['notes', '📝', 'פתקים'],
+  ['tasks', '✅', 'משימות'],
+  ['workouts', '💪', 'כושר'],
+  ['alarms', '⏰', 'שעונים'],
+  ['docs', '📁', 'מסמכים'],
 ];
-
-function TabIcon({ name, color }: { name: string; color: string }) {
-  if (name === 'dumbbell') return <MaterialCommunityIcons name="dumbbell" size={21} color={color} />;
-  return <Feather name={name as any} size={19} color={color} />;
-}
-
-const HEB_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
-const HEB_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
-function todayLabel(): string {
-  const d = new Date();
-  const day = d.getDay() === 6 ? 'שבת' : `יום ${HEB_DAYS[d.getDay()]}`;
-  return `${day}, ${d.getDate()} ב${HEB_MONTHS[d.getMonth()]}`;
-}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -242,6 +232,8 @@ function AppInner({
   const [loaded, setLoaded] = useState(false);
   const [setupVisible, setSetupVisible] = useState(false);
   const [permissionsOk, setPermissionsOk] = useState(true);
+  const [bgLocationOk, setBgLocationOk] = useState(true);
+  const [geoLog, setGeoLog] = useState<GeoLogEntry[] | null>(null);
 
   // --- notes ---
   const [notes, setNotes] = useState<StickyNote[]>([WELCOME_NOTE]);
@@ -305,7 +297,14 @@ function AppInner({
 
   const refreshPermissions = useCallback(async () => {
     setPermissionsOk(await allAlarmPermissionsOk());
+    try {
+      setBgLocationOk((await Location.getBackgroundPermissionsAsync()).granted);
+    } catch {
+      setBgLocationOk(false);
+    }
   }, []);
+
+  const openGeoLog = async () => setGeoLog(await loadGeoLog());
 
   useEffect(() => {
     (async () => {
@@ -333,6 +332,9 @@ function AppInner({
         await saveAreas(storedAreas);
       }
       setAreas(storedAreas);
+      // Re-register areas on every launch (Android drops them after a restart)
+      // and resolve any unknown inside/outside state.
+      syncGeofences(storedAreas);
 
       const storedAlarms = await reconcileAlarms(await loadAlarmClocks());
       setAlarms(storedAlarms);
@@ -827,17 +829,9 @@ function AppInner({
     <SafeAreaView style={styles.safe}>
       <StatusBar style={dark ? 'light' : 'dark'} />
       <View style={styles.appHeader}>
-        <View>
-          <Text style={styles.appEyebrow}>{todayLabel()}</Text>
-          <Text style={styles.appTitle}>יומן ושולחן עבודה</Text>
-        </View>
-        <TouchableOpacity
-          onPress={() => setSetupVisible(true)}
-          hitSlop={10}
-          style={styles.gearBtn}
-          accessibilityLabel="הגדרות"
-        >
-          <Feather name="settings" size={20} color={c.text} />
+        <Text style={styles.appTitle}>יומן ושולחן עבודה</Text>
+        <TouchableOpacity onPress={() => setSetupVisible(true)} hitSlop={10} style={styles.gearBtn}>
+          <Text style={styles.gearText}>⚙️</Text>
           {!permissionsOk ? <View style={styles.gearDot} /> : null}
         </TouchableOpacity>
       </View>
@@ -850,7 +844,7 @@ function AppInner({
             onPress={() => setActiveTab(key)}
           >
             <View>
-              <TabIcon name={icon} color={activeTab === key ? c.onAccent : c.muted} />
+              <Text style={styles.tabIcon}>{icon}</Text>
               {key === 'tasks' && tasksBadge > 0 ? (
                 <View style={styles.tabBadge}>
                   <Text style={styles.tabBadgeText}>{tasksBadge}</Text>
@@ -878,13 +872,12 @@ function AppInner({
             <View style={styles.topActionBar}>
               <Text style={styles.sectionTitle}>שולחן עבודה</Text>
               <TouchableOpacity style={styles.stickNoteBtn} onPress={openCreateNote}>
-                <Feather name="plus" size={18} color={c.onAccent} />
-                <Text style={styles.stickNoteBtnText}>פתק חדש</Text>
+                <Text style={styles.stickNoteBtnText}>+ הדבק פתק צהוב</Text>
               </TouchableOpacity>
             </View>
 
             {sortedNotes.length === 0 ? (
-              <Text style={styles.emptyText}>אין פתקים. לחץ על "פתק חדש" כדי להוסיף.</Text>
+              <Text style={styles.emptyText}>אין פתקים. לחץ על "הדבק פתק צהוב" כדי להוסיף.</Text>
             ) : null}
 
             <View style={styles.notesGrid}>
@@ -904,7 +897,7 @@ function AppInner({
                       hitSlop={10}
                       style={[styles.checkbox, note.done && styles.checkboxOn]}
                     >
-                      {note.done ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
+                      {note.done ? <Text style={styles.checkMark}>✓</Text> : null}
                     </TouchableOpacity>
                   </View>
                   <Text style={[styles.noteBody, note.done && styles.mutedText]} numberOfLines={4}>
@@ -950,9 +943,7 @@ function AppInner({
                         : ' · בלי נודניק'}
                     </Text>
                   </TouchableOpacity>
-                  <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
-                thumbColor="#FFFFFF" value={a.enabled} onValueChange={() => toggleAlarm(a)} />
+                  <Switch value={a.enabled} onValueChange={() => toggleAlarm(a)} />
                 </View>
               ))}
             </View>
@@ -963,7 +954,16 @@ function AppInner({
                 בחר אזור על המפה, והטלפון יצלצל כשתיכנס אליו, גם כשהאפליקציה סגורה.
               </Text>
 
-              {!permissionsOk ? (
+              {!bgLocationOk ? (
+                <TouchableOpacity style={styles.dangerBox} onPress={() => Linking.openSettings()}>
+                  <Text style={styles.dangerText}>
+                    ⛔ הרשאת המיקום אינה "אפשר כל הזמן", ולכן השעון לפי מיקום לא יעבוד כשהאפליקציה סגורה.
+                  </Text>
+                  <Text style={styles.dangerSub}>
+                    לחץ כאן ← הרשאות ← מיקום ← בחר "אפשר כל הזמן"
+                  </Text>
+                </TouchableOpacity>
+              ) : !permissionsOk ? (
                 <TouchableOpacity style={styles.warnBox} onPress={() => setSetupVisible(true)}>
                   <Text style={styles.warnText}>
                     ⚠️ חסרות הרשאות, והשעון עלול לא לצלצל ברקע. לחץ כאן להשלמה.
@@ -979,6 +979,10 @@ function AppInner({
                 <Text style={styles.emptyText}>עדיין לא הוגדרו אזורים.</Text>
               ) : null}
 
+              <TouchableOpacity style={[styles.grayBtn, styles.geoLogBtn]} onPress={openGeoLog}>
+                <Text style={styles.grayBtnText}>📋 יומן מיקום</Text>
+              </TouchableOpacity>
+
               {areas.map((a) => (
                 <View key={a.id} style={styles.areaItem}>
                   <TouchableOpacity style={styles.flex1} onPress={() => editArea(a)}>
@@ -993,9 +997,7 @@ function AppInner({
                       </Text>
                     ) : null}
                   </TouchableOpacity>
-                  <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
-                thumbColor="#FFFFFF" value={a.enabled} onValueChange={() => toggleArea(a)} />
+                  <Switch value={a.enabled} onValueChange={() => toggleArea(a)} />
                 </View>
               ))}
             </View>
@@ -1084,10 +1086,10 @@ function AppInner({
             <Text style={styles.whiteBtnText}>שמור</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.blueBtnFlex} onPress={() => selectedNote && shareNote(selectedNote)}>
-            <Text style={styles.softBtnText}>שתף</Text>
+            <Text style={styles.whiteBtnText}>שתף</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.redBtn} onPress={() => selectedNote && deleteNote(selectedNote)}>
-            <Text style={styles.dangerBtnText}>מחק</Text>
+            <Text style={styles.whiteBtnText}>מחק</Text>
           </TouchableOpacity>
         </View>
         {selectedNote ? (
@@ -1162,7 +1164,7 @@ function AppInner({
                     if (a) deleteArea(a);
                   }}
                 >
-                  <Text style={styles.dangerBtnText}>מחק</Text>
+                  <Text style={styles.whiteBtnText}>מחק</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -1216,8 +1218,6 @@ function AppInner({
             <View style={styles.switchRowPlain}>
               <Text style={styles.label}>נודניק</Text>
               <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
-                thumbColor="#FFFFFF"
                 value={alarmForm.snoozeEnabled}
                 onValueChange={(v) => setAlarmForm({ ...alarmForm, snoozeEnabled: v })}
               />
@@ -1265,7 +1265,7 @@ function AppInner({
               </TouchableOpacity>
               {!alarmFormIsNew ? (
                 <TouchableOpacity style={styles.redBtn} onPress={() => deleteAlarm(alarmForm)}>
-                  <Text style={styles.dangerBtnText}>מחק</Text>
+                  <Text style={styles.whiteBtnText}>מחק</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -1280,6 +1280,42 @@ function AppInner({
         onClose={onMapClosed}
         onSave={onMapSaved}
       />
+
+      <PopupShell visible={geoLog !== null} title="📋 יומן מיקום" onClose={() => setGeoLog(null)} yellow={false}>
+        <Text style={styles.itemSub}>
+          כאן רואים מתי הטלפון זיהה כניסה או יציאה מאזור, והאם צלצל. 50 האירועים האחרונים, החדש למעלה.
+        </Text>
+        {geoLog && geoLog.length === 0 ? (
+          <Text style={styles.emptyText}>עדיין אין אירועים.</Text>
+        ) : null}
+        {(geoLog ?? []).map((e, i) => {
+          const d = new Date(e.at);
+          const when = `${d.getDate()}/${d.getMonth() + 1} ${hhmm(d.getHours(), d.getMinutes())}`;
+          const icon =
+            e.kind === 'problem' ? '⚠️' : e.kind === 'start' ? '▶️' : e.kind === 'exit' ? '⬅️' : e.ok ? '🔔' : '🔕';
+          return (
+            <View key={i} style={styles.geoLogRow}>
+              <Text style={styles.geoLogTime}>{when}</Text>
+              <Text style={styles.geoLogText}>
+                {icon} <Text style={styles.geoLogLabel}>{e.label}</Text> · {e.text}
+              </Text>
+            </View>
+          );
+        })}
+        {geoLog && geoLog.length > 0 ? (
+          <TouchableOpacity
+            style={[styles.grayBtn, styles.geoLogBtn]}
+            onPress={() =>
+              confirm('ניקוי היומן', 'למחוק את כל האירועים ביומן?', 'נקה', async () => {
+                await clearGeoLog();
+                setGeoLog([]);
+              })
+            }
+          >
+            <Text style={styles.grayBtnText}>🗑️ נקה יומן</Text>
+          </TouchableOpacity>
+        ) : null}
+      </PopupShell>
 
       <SetupScreen
         visible={setupVisible}
