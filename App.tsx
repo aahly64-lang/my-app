@@ -20,6 +20,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from './modules/geo-alarm';
 import MapPicker, { MapSelection } from './src/MapPicker';
+import RingtonesScreen from './src/RingtonesScreen';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
@@ -248,6 +249,7 @@ function AppInner({
   const [permissionsOk, setPermissionsOk] = useState(true);
   const [bgLocationOk, setBgLocationOk] = useState(true);
   const [geoLog, setGeoLog] = useState<GeoLogEntry[] | null>(null);
+  const [ringtonesVisible, setRingtonesVisible] = useState(false);
 
   // --- notes ---
   const [notes, setNotes] = useState<StickyNote[]>([WELCOME_NOTE]);
@@ -943,6 +945,14 @@ function AppInner({
         {/* ---------- Tab 3: timer + location areas ---------- */}
         {activeTab === 'alarms' && (
           <View>
+            <TouchableOpacity style={styles.ringtoneCta} onPress={() => setRingtonesVisible(true)}>
+              <Text style={styles.ringtoneCtaIcon}>🎵</Text>
+              <View style={styles.flex1}>
+                <Text style={styles.ringtoneCtaTitle}>יצירת צלצול</Text>
+                <Text style={styles.ringtoneCtaSub}>חתוך קטע משיר או מהקלטה, לשעונים ולטלפון</Text>
+              </View>
+              <Text style={styles.ringtoneCtaChev}>‹</Text>
+            </TouchableOpacity>
             <View style={styles.card}>
               <View style={styles.cardHeaderRow}>
                 <Text style={styles.subTitle}>⏰ שעון מעורר</Text>
@@ -1360,6 +1370,8 @@ function AppInner({
           </TouchableOpacity>
         ) : null}
       </PopupShell>
+
+      <RingtonesScreen visible={ringtonesVisible} onClose={() => setRingtonesVisible(false)} />
 
       <SetupScreen
         visible={setupVisible}

@@ -291,3 +291,21 @@ export function migrateCategories(old: MuscleCategory[] | undefined): WorkoutGro
   }
   return groups;
 }
+
+// ---------- my ringtones ----------
+
+export const RINGTONES_KEY = '@avi_ringtones_v1';
+
+export interface MyRingtone {
+  id: string;
+  name: string;
+  /** file:// copy inside the app */
+  path: string;
+  /** content:// in the phone's Ringtones (used for alarms and by the phone) */
+  mediaUri: string | null;
+  durationMs: number;
+  createdAt: number;
+}
+
+export const loadRingtones = async () => (await readJson<MyRingtone[]>(RINGTONES_KEY)) ?? [];
+export const saveRingtones = (list: MyRingtone[]) => writeJson(RINGTONES_KEY, list);

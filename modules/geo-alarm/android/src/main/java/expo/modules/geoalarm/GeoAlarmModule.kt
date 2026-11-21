@@ -96,6 +96,62 @@ class GeoAlarmModule : Module() {
       Unit
     }
 
+    // ---------- ringtone maker ----------
+    Function("audioDuration") { src: String ->
+      RingtoneMaker.durationMs(context, src).toDouble()
+    }
+
+    AsyncFunction("makeRingtone") { src: String, startMs: Double, endMs: Double, fadeMs: Double, id: String, name: String ->
+      val dir = java.io.File(context.filesDir, "ringtones").apply { mkdirs() }
+      val out = java.io.File(dir, "$id.m4a")
+      if (out.exists()) out.delete()
+      RingtoneMaker.trim(src, startMs.toLong(), endMs.toLong(), fadeMs.toLong(), out)
+      val media = RingtoneMaker.publish(context, out, name)
+      mapOf("path" to "file://" + out.absolutePath, "mediaUri" to media)
+    }
+
+    Function("renameRingtone") { mediaUri: String?, name: String ->
+      RingtoneMaker.rename(context, mediaUri, name)
+      Unit
+    }
+
+    Function("deleteRingtone") { path: String?, mediaUri: String? ->
+      RingtoneMaker.delete(context, path, mediaUri)
+      Unit
+    }
+
+    Function("previewAudio") { src: String, startMs: Double, endMs: Double, fadeMs: Double ->
+      RingtoneMaker.preview(context, src, startMs.toLong(), endMs.toLong(), fadeMs.toLong())
+      Unit
+    }
+
+    Function("previewPosition") {
+      RingtoneMaker.previewPosition().toDouble()
+    }
+
+    Function("stopPreview") {
+      RingtoneMaker.stopPreview()
+      Unit
+    }
+
+    Function("canWriteSettings") {
+      RingtoneMaker.canWriteSettings(context)
+    }
+
+    Function("openWriteSettings") {
+      RingtoneMaker.openWriteSettings(context)
+      Unit
+    }
+
+    Function("openSoundSettings") {
+      RingtoneMaker.openSoundSettings(context)
+      Unit
+    }
+
+    Function("setPhoneRingtone") { mediaUri: String, type: String ->
+      RingtoneMaker.setPhoneDefault(context, mediaUri, type)
+    }
+
     Function("getSoundTitle") { uri: String? ->
       soundTitle(uri)
     }

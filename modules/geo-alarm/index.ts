@@ -50,6 +50,24 @@ type GeoAlarmNative = {
   openAutoStartSettings(): boolean;
   openAppSettings(): void;
   getInitialSharedText(): string | null;
+  audioDuration(src: string): number;
+  makeRingtone(
+    src: string,
+    startMs: number,
+    endMs: number,
+    fadeMs: number,
+    id: string,
+    name: string
+  ): Promise<{ path: string; mediaUri: string | null }>;
+  renameRingtone(mediaUri: string | null, name: string): void;
+  deleteRingtone(path: string | null, mediaUri: string | null): void;
+  previewAudio(src: string, startMs: number, endMs: number, fadeMs: number): void;
+  previewPosition(): number;
+  stopPreview(): void;
+  canWriteSettings(): boolean;
+  openWriteSettings(): void;
+  openSoundSettings(): void;
+  setPhoneRingtone(mediaUri: string, type: 'call' | 'notification' | 'alarm'): boolean;
   addListener(event: 'onSharedText', cb: (e: SharedTextEvent) => void): { remove(): void };
 };
 
@@ -97,6 +115,27 @@ export const GeoAlarm = {
   openAutoStartSettings: () => safe(() => native!.openAutoStartSettings(), false),
   openAppSettings: () => safe(() => native!.openAppSettings(), undefined),
   getInitialSharedText: () => safe(() => native!.getInitialSharedText(), null),
+  audioDuration: (src: string) => safe(() => native!.audioDuration(src), 0),
+  /** Cuts [startMs,endMs] with optional fade-in; throws a Hebrew message on failure. */
+  makeRingtone: (src: string, startMs: number, endMs: number, fadeMs: number, id: string, name: string) => {
+    if (!native) return Promise.reject(new Error('לא זמין במכשיר הזה'));
+    return native.makeRingtone(src, startMs, endMs, fadeMs, id, name);
+  },
+  renameRingtone: (mediaUri: string | null, name: string) => safe(() => native!.renameRingtone(mediaUri, name), undefined),
+  deleteRingtone: (path: string | null, mediaUri: string | null) =>
+    safe(() => native!.deleteRingtone(path, mediaUri), undefined),
+  previewAudio: (src: string, startMs: number, endMs: number, fadeMs: number) =>
+    safe(() => {
+      native!.previewAudio(src, startMs, endMs, fadeMs);
+      return true;
+    }, false),
+  previewPosition: () => safe(() => native!.previewPosition(), -1),
+  stopPreview: () => safe(() => native!.stopPreview(), undefined),
+  canWriteSettings: () => safe(() => native!.canWriteSettings(), false),
+  openWriteSettings: () => safe(() => native!.openWriteSettings(), undefined),
+  openSoundSettings: () => safe(() => native!.openSoundSettings(), undefined),
+  setPhoneRingtone: (mediaUri: string, type: 'call' | 'notification' | 'alarm') =>
+    safe(() => native!.setPhoneRingtone(mediaUri, type), false),
   addSharedTextListener: (cb: (text: string) => void) =>
     safe(() => native!.addListener('onSharedText', (e) => cb(e.text)), { remove() {} }),
 };
