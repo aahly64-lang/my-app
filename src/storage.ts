@@ -14,6 +14,9 @@ export interface StickyNote {
   done?: boolean;
   scheduleEnabled?: boolean;
   reminderMode?: 'ring' | 'silent'; // default ring
+  reminderType?: 'once' | 'repeat';
+  repeatDays?: number[]; // 0 = Sunday
+  repeatEnd?: string; // YYYY-MM-DD
   scheduleDate?: string; // YYYY-MM-DD
   scheduleTime?: string; // HH:MM
   notificationId?: string | null;
@@ -164,3 +167,96 @@ export const loadAlarmClocks = async () => (await readJson<AlarmClock[]>(ALARMS_
 export const saveAlarmClocks = (a: AlarmClock[]) => writeJson(ALARMS_KEY, a);
 export const loadSounds = async () => (await readJson<SoundSettings>(SOUNDS_KEY)) ?? {};
 export const saveSounds = (s: SoundSettings) => writeJson(SOUNDS_KEY, s);
+
+// ---------- v4: settings, workout groups, tasks, document folders ----------
+
+export const THEME_KEY = '@avi_theme_v1';
+export const GROUPS_KEY = '@avi_workout_groups_v1';
+export const TASKS_KEY = '@avi_tasks_v1';
+export const DOC_FOLDERS_KEY = '@avi_doc_folders_v1';
+
+export interface WorkoutSub {
+  id: string;
+  name: string;
+  videos: WorkoutLink[];
+}
+export interface WorkoutGroup {
+  id: string;
+  name: string;
+  subs: WorkoutSub[];
+}
+
+export interface SubTask {
+  id: string;
+  title: string;
+  done: boolean;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  notes?: string;
+  done: boolean;
+  doneAt?: number;
+  createdAt: number;
+  order: number;
+  star?: boolean;
+  due?: string; // YYYY-MM-DD
+  reminder?: boolean;
+  reminderTime?: string; // HH:MM
+  reminderMode?: 'ring' | 'silent';
+  repeatDays?: number[]; // recurring task: next due date after completion
+  areaId?: string; // remind when entering this location area
+  subtasks?: SubTask[];
+}
+
+export interface DocFolder {
+  uri: string;
+  name: string;
+}
+
+export const loadThemeMode = async () => ((await readJson<string>(THEME_KEY)) as 'auto' | 'light' | 'dark' | null) ?? 'auto';
+export const saveThemeMode = (m: string) => writeJson(THEME_KEY, m);
+export const loadGroups = () => readJson<WorkoutGroup[]>(GROUPS_KEY);
+export const saveGroups = (g: WorkoutGroup[]) => writeJson(GROUPS_KEY, g);
+export const loadTasks = async () => (await readJson<Task[]>(TASKS_KEY)) ?? [];
+export const saveTasks = (t: Task[]) => writeJson(TASKS_KEY, t);
+export const loadDocFolders = async () => (await readJson<DocFolder[]>(DOC_FOLDERS_KEY)) ?? [];
+export const saveDocFolders = (f: DocFolder[]) => writeJson(DOC_FOLDERS_KEY, f);
+
+const sub = (name: string): WorkoutSub => ({ id: newId(), name, videos: [] });
+const group = (name: string, subs: string[]): WorkoutGroup => ({ id: newId(), name, subs: subs.map(sub) });
+
+export function defaultGroups(): WorkoutGroup[] {
+  return [
+    group('חזה', ['עליון', 'אמצעי', 'תחתון']),
+    group('גב', ['רחב גבי', 'גב עליון וטרפזים', 'גב תחתון']),
+    group('כתפיים', ['קדמית', 'צדדית', 'אחורית']),
+    group('יד קדמית', ['ראש ארוך', 'ראש קצר', 'פטישים']),
+    group('יד אחורית', ['ראש ארוך', 'ראש צדי', 'ראש פנימי']),
+    group('אמות', ['כפיפה', 'פשיטה', 'כוח אחיזה']),
+    group('רגליים', ['ארבע ראשי', 'ירך אחורית', 'ישבן', 'תאומים']),
+    group('בטן', ['עליונה', 'תחתונה', 'אלכסונים', 'ליבה']),
+    group('כושר כללי', ['חימום', 'מתיחות', 'אירובי ו-HIIT']),
+  ];
+}
+
+/** Moves videos from the old flat categories into the new groups (sub-group "כללי"). */
+export function migrateCategories(old: MuscleCategory[] | undefined): WorkoutGroup[] {
+  const groups = defaultGroups();
+  for (const cat of old ?? []) {
+    if (!cat.videos?.length) continue;
+    let g = groups.find((x) => x.name === cat.name);
+    if (!g) {
+      g = { id: newId(), name: cat.name, subs: [] };
+      groups.push(g);
+    }
+    let general = g.subs.find((s) => s.name === 'כללי');
+    if (!general) {
+      general = sub('כללי');
+      g.subs.unshift(general);
+    }
+    general.videos.push(...cat.videos);
+  }
+  return groups;
+}

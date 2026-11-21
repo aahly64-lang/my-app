@@ -2,28 +2,32 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   AppState,
-  Image,
-  Linking,
-  Modal,
   SafeAreaView,
   ScrollView,
   Share,
-  StyleSheet,
   Switch,
   Text,
   TextInput,
   TouchableOpacity,
   View,
+  useColorScheme,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { GeoAlarm } from './modules/geo-alarm';
 import MapPicker, { MapSelection } from './src/MapPicker';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
+import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
+import TasksTab, { countDueToday } from './src/TasksTab';
+import DocsTab from './src/DocsTab';
 import { syncGeofences, MIN_RADIUS_M } from './src/geoTask';
 import { exportBackup, pickBackup } from './src/backup';
+import { useAppStyles } from './src/appStyles';
+import { DARK, LIGHT, ThemeContext, ThemeMode, useTheme } from './src/theme';
+import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './src/ui';
+import { DAY_LETTERS, daysSummary, displayYMD, endOfDay, hhmm, parseHHMM, parseYMD, pickTimeWheels } from './src/pickers';
 import {
   TIMER_RING_ID,
   alarmRingId,
@@ -31,6 +35,7 @@ import {
   nextAlarmTime,
   noteRingId,
   scheduleAlarmClock,
+  scheduleReminder,
   scheduleSimpleRing,
   scheduledRingIds,
   untilText,
@@ -39,16 +44,20 @@ import {
   AlarmArea,
   AlarmClock,
   AreaMode,
-  DEFAULT_CATEGORIES,
-  MuscleCategory,
   StickyNote,
+  Task,
   TimerState,
   WELCOME_NOTE,
-  WorkoutLink,
   formatHebrewDate,
   loadAlarmClocks,
   loadAreas,
+  migrateCategories,
   loadBoard,
+  loadDocFolders,
+  loadGroups,
+  loadSounds,
+  loadTasks,
+  loadThemeMode,
   loadTimer,
   localDateString,
   markSetupSeen,
@@ -56,11 +65,24 @@ import {
   saveAlarmClocks,
   saveAreas,
   saveBoard,
+  saveDocFolders,
+  saveGroups,
+  saveSounds,
+  saveTasks,
+  saveThemeMode,
   saveTimer,
   wasSetupSeen,
 } from './src/storage';
 
-type MainTab = 'tasks' | 'workouts' | 'alarms';
+type MainTab = 'notes' | 'tasks' | 'workouts' | 'alarms' | 'docs';
+
+const TABS: [MainTab, string, string][] = [
+  ['notes', '📝', 'פתקים'],
+  ['tasks', '✅', 'משימות'],
+  ['workouts', '💪', 'כושר'],
+  ['alarms', '⏰', 'שעונים'],
+  ['docs', '📁', 'מסמכים'],
+];
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -70,123 +92,86 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// ---------- helpers ----------
-
-function detectPlatform(url: string): WorkoutLink['platform'] {
-  const lower = url.toLowerCase();
-  if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'youtube';
-  if (lower.includes('facebook.com') || lower.includes('fb.watch')) return 'facebook';
-  return 'other';
-}
-
-function youtubeId(url: string): string | null {
-  const m =
-    url.match(/youtu\.be\/([\w-]{6,})/) ||
-    url.match(/[?&]v=([\w-]{6,})/) ||
-    url.match(/youtube\.com\/(?:shorts|embed|live)\/([\w-]{6,})/);
-  return m ? m[1] : null;
-}
-
-function extractUrl(text: string): string | null {
-  const m = text.match(/https?:\/\/\S+/);
-  return m ? m[0] : null;
-}
-
-function parseDateTimeToDate(dateStr?: string, timeStr?: string): Date | null {
-  if (!dateStr || !timeStr) return null;
-  const dm = dateStr.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const tm = timeStr.trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!dm || !tm) return null;
-  const target = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), Number(tm[1]), Number(tm[2]), 0, 0);
-  return Number.isNaN(target.getTime()) ? null : target;
-}
-
-function displayDate(dateStr: string): string {
-  const d = parseDateTimeToDate(dateStr, '00:00');
-  return d ? d.toLocaleDateString('he-IL') : dateStr;
-}
-
-function pickDate(current: string, onPick: (v: string) => void) {
-  const base = parseDateTimeToDate(current, '12:00') ?? new Date();
-  DateTimePickerAndroid.open({
-    value: base,
-    mode: 'date',
-    minimumDate: new Date(),
-    onChange: (e, d) => {
-      if (e.type === 'set' && d) onPick(localDateString(d));
-    },
-  });
-}
-
-function pickTime(currentDate: string, currentTime: string, onPick: (v: string) => void) {
-  const base = parseDateTimeToDate(currentDate, currentTime) ?? new Date();
-  DateTimePickerAndroid.open({
-    value: base,
-    mode: 'time',
-    is24Hour: true,
-    onChange: (e, d) => {
-      if (e.type === 'set' && d) {
-        onPick(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
-      }
-    },
-  });
-}
-
-function confirm(title: string, message: string, confirmText: string, onConfirm: () => void) {
-  Alert.alert(title, message, [
-    { text: 'ביטול', style: 'cancel' },
-    { text: confirmText, style: 'destructive', onPress: onConfirm },
-  ]);
-}
-
 function formatRadius(r: number): string {
   return r >= 1000 ? `${Math.round(r / 10) / 100} ק"מ` : `${r} מ'`;
 }
 
-type ReminderMode = 'ring' | 'silent';
+// ---------- note reminders ----------
+
+function reminderFromNote(n: StickyNote): ReminderValue {
+  const base = emptyReminder();
+  return {
+    ...base,
+    enabled: !!n.scheduleEnabled,
+    type: n.reminderType ?? 'once',
+    date: n.scheduleDate ?? base.date,
+    time: n.scheduleTime ?? base.time,
+    days: n.repeatDays ?? [],
+    endDate: n.repeatEnd ?? base.endDate,
+    mode: n.reminderMode ?? 'ring',
+  };
+}
+
+function noteReminderFields(r: ReminderValue): Partial<StickyNote> {
+  return {
+    scheduleEnabled: r.enabled,
+    reminderType: r.type,
+    reminderMode: r.mode,
+    scheduleDate: r.enabled && r.type === 'once' ? r.date : undefined,
+    scheduleTime: r.enabled ? r.time : undefined,
+    repeatDays: r.enabled && r.type === 'repeat' ? r.days : undefined,
+    repeatEnd: r.enabled && r.type === 'repeat' ? r.endDate : undefined,
+    notificationId: null,
+  };
+}
 
 /**
- * (Re)schedules the reminder of a note. Cancels any previous ring/notification first.
- * Returns { ok, notificationId } – ok=false means the user must fix the date/time.
+ * (Re)schedules the reminder of a note. Cancels any previous one first.
+ * Returns false when the date/time is invalid (and tells the user unless silent).
  */
 async function scheduleNoteReminder(
   noteId: string,
   title: string,
   body: string,
-  enabled: boolean,
-  mode: ReminderMode,
-  dateStr?: string,
-  timeStr?: string,
+  r: ReminderValue,
   previousNotificationId?: string | null,
-  silent = false
-): Promise<{ ok: boolean; notificationId: string | null }> {
+  quiet = false
+): Promise<boolean> {
   cancelRing(noteRingId(noteId));
   if (previousNotificationId) {
     await Notifications.cancelScheduledNotificationAsync(previousNotificationId).catch(() => {});
   }
-  if (!enabled) return { ok: true, notificationId: null };
-  const target = parseDateTimeToDate(dateStr, timeStr);
-  if (!target) {
-    if (!silent) Alert.alert('תזמון לא תקין', 'בחר תאריך ושעה.');
-    return { ok: false, notificationId: null };
-  }
-  if (target.getTime() <= Date.now()) {
-    if (!silent) Alert.alert('הזמן כבר עבר', 'בחר תאריך ושעה עתידיים כדי לתזמן תזכורת.');
-    return { ok: false, notificationId: null };
-  }
-  if (mode === 'ring') {
-    await scheduleSimpleRing(noteRingId(noteId), 'reminder', target.getTime(), title || 'תזכורת', body || 'הגיע הזמן לבצע את המטלה.');
-    return { ok: true, notificationId: null };
-  }
-  try {
-    const id = await Notifications.scheduleNotificationAsync({
-      content: { title: `תזכורת: ${title || 'מטלה'}`, body: body || 'הגיע הזמן לבצע את המטלה.', sound: true },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: target },
+  if (!r.enabled) return true;
+  const [h, m] = parseHHMM(r.time);
+  const t = title || 'תזכורת';
+  const b = body || 'הגיע הזמן לבצע את המטלה.';
+  if (r.type === 'repeat') {
+    if (r.days.length === 0) {
+      if (!quiet) Alert.alert('חסרים ימים', 'בחר לפחות יום אחד בשבוע.');
+      return false;
+    }
+    const ok = await scheduleReminder({
+      id: noteRingId(noteId),
+      title: t,
+      body: b,
+      silent: r.mode === 'silent',
+      repeat: { days: r.days, hour: h, minute: m, endAt: endOfDay(r.endDate) },
     });
-    return { ok: true, notificationId: id };
-  } catch {
-    return { ok: false, notificationId: null };
+    if (!ok && !quiet) Alert.alert('אין מועד עתידי', 'אין אף מועד לפני תאריך הסיום. בדוק את הימים ותאריך הסיום.');
+    return ok;
   }
+  const d = parseYMD(r.date);
+  if (!d) {
+    if (!quiet) Alert.alert('תזמון לא תקין', 'בחר תאריך ושעה.');
+    return false;
+  }
+  d.setHours(h, m, 0, 0);
+  if (d.getTime() <= Date.now()) {
+    if (!quiet) Alert.alert('הזמן כבר עבר', 'בחר תאריך ושעה עתידיים כדי לתזמן תזכורת.');
+    return false;
+  }
+  await scheduleReminder({ id: noteRingId(noteId), title: t, body: b, silent: r.mode === 'silent', once: { at: d.getTime() } });
+  return true;
 }
 
 async function cancelNoteReminder(note: StickyNote) {
@@ -196,117 +181,50 @@ async function cancelNoteReminder(note: StickyNote) {
   }
 }
 
-const DAY_LETTERS = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
-
-function daysSummary(days: number[]): string {
-  if (days.length === 0) return 'פעם אחת';
-  if (days.length === 7) return 'כל יום';
-  const sorted = [...days].sort();
-  if (sorted.join() === '0,1,2,3,4') return 'א׳–ה׳';
-  if (sorted.join() === '0,1,2,3,4,5') return 'א׳–ו׳';
-  return sorted.map((d) => DAY_LETTERS[d] + '׳').join(' ');
-}
-
-function hhmm(h: number, m: number) {
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-// ---------- small UI pieces ----------
-
-function ScheduleEditor(props: {
-  open: boolean;
-  setOpen: (v: boolean) => void;
-  enabled: boolean;
-  setEnabled: (v: boolean) => void;
-  date: string;
-  setDate: (v: string) => void;
-  time: string;
-  setTime: (v: string) => void;
-  mode: ReminderMode;
-  setMode: (v: ReminderMode) => void;
-}) {
-  const { open, setOpen, enabled, setEnabled, date, setDate, time, setTime, mode, setMode } = props;
-  return (
-    <>
-      <TouchableOpacity style={styles.advancedToggle} onPress={() => setOpen(!open)}>
-        <Text style={styles.advancedToggleText}>
-          {open ? '▾ הסתר תזכורת' : '◂ תזכורת בתאריך ושעה (לא חובה)'}
-        </Text>
-      </TouchableOpacity>
-      {open && (
-        <View style={styles.advancedBox}>
-          <View style={styles.switchRow}>
-            <Text style={styles.switchLabel}>הפעל תזכורת למטלה</Text>
-            <Switch value={enabled} onValueChange={setEnabled} />
-          </View>
-          {enabled && (
-            <>
-              <View style={styles.row}>
-                <TouchableOpacity style={[styles.pickerBtn, styles.flex1]} onPress={() => pickDate(date, setDate)}>
-                  <Text style={styles.pickerBtnText}>📅 {displayDate(date)}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.pickerBtn, styles.flex1]} onPress={() => pickTime(date, time, setTime)}>
-                  <Text style={styles.pickerBtnText}>🕘 {time}</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.row}>
-                {(
-                  [
-                    ['ring', '🔔 צלצול'],
-                    ['silent', '🔕 התראה שקטה'],
-                  ] as [ReminderMode, string][]
-                ).map(([m, label]) => (
-                  <TouchableOpacity
-                    key={m}
-                    style={[styles.segment, mode === m && styles.segmentOn]}
-                    onPress={() => setMode(m)}
-                  >
-                    <Text style={[styles.segmentText, mode === m && styles.segmentTextOn]}>{label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </>
-          )}
-        </View>
-      )}
-    </>
-  );
-}
-
-function PopupShell({
-  visible,
-  title,
-  onClose,
-  children,
-  yellow = true,
-}: {
-  visible: boolean;
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-  yellow?: boolean;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={[styles.popup, yellow ? styles.popupYellow : styles.popupWhite]}>
-          <View style={styles.popupHeader}>
-            <Text style={styles.popupTitle}>{title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={12}>
-              <Text style={styles.closeX}>✕</Text>
-            </TouchableOpacity>
-          </View>
-          <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
+function reminderTag(n: StickyNote): string | null {
+  if (!n.scheduleEnabled || !n.scheduleTime) return null;
+  const icon = n.reminderMode === 'silent' ? '🔕' : '🔔';
+  if (n.reminderType === 'repeat') return `${icon} ${daysSummary(n.repeatDays ?? [])} ${n.scheduleTime}`;
+  return n.scheduleDate ? `${icon} ${displayYMD(n.scheduleDate)} ${n.scheduleTime}` : null;
 }
 
 // ---------- App ----------
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<MainTab>('tasks');
+  const system = useColorScheme();
+  const [themeMode, setThemeModeState] = useState<ThemeMode>('auto');
+  useEffect(() => {
+    loadThemeMode().then((m) => setThemeModeState(m as ThemeMode));
+  }, []);
+  const setThemeMode = (m: ThemeMode) => {
+    setThemeModeState(m);
+    saveThemeMode(m);
+  };
+  const dark = themeMode === 'dark' || (themeMode === 'auto' && system === 'dark');
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeContext.Provider value={dark ? DARK : LIGHT}>
+        <AppInner themeMode={themeMode} setThemeMode={setThemeMode} dark={dark} />
+      </ThemeContext.Provider>
+    </GestureHandlerRootView>
+  );
+}
+
+function AppInner({
+  themeMode,
+  setThemeMode,
+  dark,
+}: {
+  themeMode: ThemeMode;
+  setThemeMode: (m: ThemeMode) => void;
+  dark: boolean;
+}) {
+  const styles = useAppStyles();
+  const c = useTheme();
+  const [activeTab, setActiveTab] = useState<MainTab>('notes');
+  const [dataVersion, setDataVersion] = useState(0);
+  const [tasksBadge, setTasksBadge] = useState(0);
+  const [shared, setShared] = useState<SharedLink | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [setupVisible, setSetupVisible] = useState(false);
   const [permissionsOk, setPermissionsOk] = useState(true);
@@ -316,37 +234,17 @@ export default function App() {
   const [createVisible, setCreateVisible] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newBody, setNewBody] = useState('');
-  const [newAdvOpen, setNewAdvOpen] = useState(false);
-  const [newSchedEnabled, setNewSchedEnabled] = useState(false);
-  const [newSchedDate, setNewSchedDate] = useState(localDateString());
-  const [newSchedTime, setNewSchedTime] = useState('09:00');
-  const [newMode, setNewMode] = useState<ReminderMode>('ring');
+  const [newReminder, setNewReminder] = useState<ReminderValue>(emptyReminder());
 
   const [selectedNote, setSelectedNote] = useState<StickyNote | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editBody, setEditBody] = useState('');
-  const [editAdvOpen, setEditAdvOpen] = useState(false);
-  const [editSchedEnabled, setEditSchedEnabled] = useState(false);
-  const [editSchedDate, setEditSchedDate] = useState(localDateString());
-  const [editSchedTime, setEditSchedTime] = useState('09:00');
-  const [editMode, setEditMode] = useState<ReminderMode>('ring');
+  const [editReminder, setEditReminder] = useState<ReminderValue>(emptyReminder());
 
   // --- alarm clocks ---
   const [alarms, setAlarms] = useState<AlarmClock[]>([]);
   const [alarmForm, setAlarmForm] = useState<AlarmClock | null>(null);
   const [alarmFormIsNew, setAlarmFormIsNew] = useState(false);
-
-  // --- workouts ---
-  const [categories, setCategories] = useState<MuscleCategory[]>(DEFAULT_CATEGORIES);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('chest');
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [videoTitle, setVideoTitle] = useState('');
-  const [videoUrl, setVideoUrl] = useState('');
-  const [sharedBanner, setSharedBanner] = useState(false);
-  const [editingVideo, setEditingVideo] = useState<{ video: WorkoutLink; categoryId: string } | null>(null);
-  const [evTitle, setEvTitle] = useState('');
-  const [evUrl, setEvUrl] = useState('');
-  const [evCategory, setEvCategory] = useState('');
 
   // --- timer ---
   const [timerMinutes, setTimerMinutes] = useState('3');
@@ -400,11 +298,10 @@ export default function App() {
       const board = await loadBoard();
       if (board) {
         if (Array.isArray(board.notes)) setNotes(board.notes);
-        if (Array.isArray(board.categories)) {
-          setCategories(board.categories);
-          setSelectedCategoryId(board.categories[0]?.id ?? '');
-        }
       }
+      // One-time move of the old flat workout categories into groups/sub-groups.
+      if (!(await loadGroups())) await saveGroups(migrateCategories(board?.categories));
+      setTasksBadge(countDueToday(await loadTasks()));
 
       let storedAreas = await loadAreas();
       // Migrate coordinate-based alarms from the first version.
@@ -449,8 +346,8 @@ export default function App() {
   }, [refreshPermissions, reconcileAlarms]);
 
   useEffect(() => {
-    if (loaded) saveBoard({ notes, categories });
-  }, [notes, categories, loaded]);
+    if (loaded) saveBoard({ notes });
+  }, [notes, loaded]);
 
   useEffect(() => {
     if (loaded) saveTimer(timer);
@@ -462,6 +359,7 @@ export default function App() {
       if (s === 'active') {
         setAreas(await loadAreas());
         setAlarms(await reconcileAlarms(await loadAlarmClocks()));
+        setTasksBadge(countDueToday(await loadTasks()));
         refreshPermissions();
       }
     });
@@ -474,11 +372,10 @@ export default function App() {
     const url = extractUrl(text) ?? text.trim();
     if (!url) return;
     setActiveTab('workouts');
-    setVideoUrl(url);
     const withoutUrl = text.replace(url, '').trim();
-    setVideoTitle(withoutUrl.length > 0 && withoutUrl.length < 80 ? withoutUrl : '');
-    setSharedBanner(true);
+    setShared({ url, title: withoutUrl.length > 0 && withoutUrl.length < 80 ? withoutUrl : '' });
   }, []);
+  const onSharedUsed = useCallback(() => setShared(null), []);
 
   useEffect(() => {
     const initial = GeoAlarm.getInitialSharedText();
@@ -497,11 +394,7 @@ export default function App() {
   const openCreateNote = () => {
     setNewTitle('');
     setNewBody('');
-    setNewAdvOpen(false);
-    setNewSchedEnabled(false);
-    setNewSchedDate(localDateString());
-    setNewSchedTime('09:00');
-    setNewMode('ring');
+    setNewReminder(emptyReminder());
     setCreateVisible(true);
   };
 
@@ -510,22 +403,15 @@ export default function App() {
       Alert.alert('פתק ריק', 'הזן כותרת או תוכן לפתק.');
       return;
     }
-    const wantsSchedule = newAdvOpen && newSchedEnabled;
     const id = newId();
-    const r = await scheduleNoteReminder(
-      id, newTitle.trim(), newBody.trim(), wantsSchedule, newMode, newSchedDate, newSchedTime, null
-    );
-    if (!r.ok) return;
+    const ok = await scheduleNoteReminder(id, newTitle.trim(), newBody.trim(), newReminder, null);
+    if (!ok) return;
     const item: StickyNote = {
       id,
       title: newTitle.trim() || 'פתק צהוב',
       body: newBody.trim(),
       updatedAt: new Date().toISOString(),
-      scheduleEnabled: wantsSchedule,
-      reminderMode: newMode,
-      scheduleDate: wantsSchedule ? newSchedDate : undefined,
-      scheduleTime: wantsSchedule ? newSchedTime : undefined,
-      notificationId: r.notificationId,
+      ...noteReminderFields(newReminder),
     };
     setNotes((prev) => [item, ...prev]);
     setCreateVisible(false);
@@ -535,27 +421,19 @@ export default function App() {
     setSelectedNote(note);
     setEditTitle(note.title);
     setEditBody(note.body);
-    setEditAdvOpen(Boolean(note.scheduleEnabled));
-    setEditSchedEnabled(Boolean(note.scheduleEnabled));
-    setEditSchedDate(note.scheduleDate || localDateString());
-    setEditSchedTime(note.scheduleTime || '09:00');
-    setEditMode(note.reminderMode ?? 'ring');
+    setEditReminder(reminderFromNote(note));
   };
 
   const saveNote = async () => {
     if (!selectedNote) return;
-    const wantsSchedule = editAdvOpen && editSchedEnabled;
-    const r = await scheduleNoteReminder(
+    const ok = await scheduleNoteReminder(
       selectedNote.id,
       editTitle.trim(),
       editBody.trim(),
-      wantsSchedule,
-      editMode,
-      editSchedDate,
-      editSchedTime,
+      editReminder,
       selectedNote.notificationId
     );
-    if (!r.ok) return;
+    if (!ok) return;
     setNotes((prev) =>
       prev.map((n) =>
         n.id === selectedNote.id
@@ -564,11 +442,7 @@ export default function App() {
               title: editTitle.trim() || 'פתק צהוב',
               body: editBody.trim(),
               updatedAt: new Date().toISOString(),
-              scheduleEnabled: wantsSchedule,
-              reminderMode: editMode,
-              scheduleDate: wantsSchedule ? editSchedDate : undefined,
-              scheduleTime: wantsSchedule ? editSchedTime : undefined,
-              notificationId: r.notificationId,
+              ...noteReminderFields(editReminder),
             }
           : n
       )
@@ -585,9 +459,7 @@ export default function App() {
           ? {
               ...n,
               done,
-              ...(done
-                ? { notificationId: null, scheduleEnabled: false, scheduleDate: undefined, scheduleTime: undefined }
-                : {}),
+              ...(done ? { notificationId: null, scheduleEnabled: false } : {}),
             }
           : n
       )
@@ -603,113 +475,47 @@ export default function App() {
   };
 
   const shareNote = async (note: StickyNote) => {
-    const info =
-      note.scheduleEnabled && note.scheduleDate && note.scheduleTime
-        ? `\nתזכורת: ${displayDate(note.scheduleDate)} ${note.scheduleTime}`
-        : '';
-    await Share.share({ message: `${editTitle || note.title}\n\n${editBody || note.body}${info}` });
-  };
-
-  // ---------- workouts ----------
-
-  const addCategory = () => {
-    const clean = newCategoryName.trim();
-    if (!clean) return;
-    const cat: MuscleCategory = { id: newId(), name: clean, videos: [] };
-    setCategories((prev) => [...prev, cat]);
-    setSelectedCategoryId(cat.id);
-    setNewCategoryName('');
-  };
-
-  const removeCategory = (cat: MuscleCategory) => {
-    const extra = cat.videos.length ? ` ואת ${cat.videos.length} הסרטונים שבה` : '';
-    confirm('מחיקת קבוצה', `למחוק את "${cat.name}"${extra}?`, 'מחק', () => {
-      setCategories((prev) => {
-        const next = prev.filter((c) => c.id !== cat.id);
-        if (selectedCategoryId === cat.id) setSelectedCategoryId(next[0]?.id ?? '');
-        return next;
-      });
+    const tag = reminderTag(note);
+    await Share.share({
+      message: `${editTitle || note.title}\n\n${editBody || note.body}${tag ? `\nתזכורת: ${tag}` : ''}`,
     });
   };
 
-  const activeCategory = categories.find((c) => c.id === selectedCategoryId);
+  // Note -> task (the note is removed).
+  const noteToTask = (note: StickyNote) => {
+    confirm('העברה למשימות', `להפוך את "${note.title}" למשימה? הפתק יוסר.`, 'העבר', async () => {
+      await cancelNoteReminder(note);
+      const tasks = await loadTasks();
+      const task: Task = {
+        id: newId(),
+        title: note.title,
+        notes: note.body || undefined,
+        done: false,
+        createdAt: Date.now(),
+        order: tasks.reduce((m, t) => Math.min(m, t.order), 0) - 1,
+        subtasks: [],
+      };
+      await saveTasks([task, ...tasks]);
+      setNotes((prev) => prev.filter((n) => n.id !== note.id));
+      setSelectedNote(null);
+      setDataVersion((v) => v + 1);
+      setActiveTab('tasks');
+    });
+  };
 
-  const addVideo = () => {
-    const url = (extractUrl(videoUrl) ?? videoUrl).trim();
-    if (!activeCategory) {
-      Alert.alert('אין קבוצת שריר', 'הוסף קודם קבוצת שריר.');
-      return;
-    }
-    if (!url) {
-      Alert.alert('חסר קישור', 'הדבק קישור לסרטון.');
-      return;
-    }
-    const item: WorkoutLink = {
+  // Task -> note (called by the tasks tab, which removes the task).
+  const taskToNote = useCallback((t: Task) => {
+    const item: StickyNote = {
       id: newId(),
-      title: videoTitle.trim() || 'סרטון כושר',
-      url,
-      platform: detectPlatform(url),
+      title: t.title,
+      body: [t.notes ?? '', ...(t.subtasks ?? []).map((s) => `${s.done ? '☑' : '☐'} ${s.title}`)]
+        .filter(Boolean)
+        .join('\n'),
+      updatedAt: new Date().toISOString(),
     };
-    setCategories((prev) =>
-      prev.map((c) => (c.id === activeCategory.id ? { ...c, videos: [item, ...c.videos] } : c))
-    );
-    setVideoTitle('');
-    setVideoUrl('');
-    setSharedBanner(false);
-  };
-
-  const openVideo = async (url: string) => {
-    try {
-      await Linking.openURL(url);
-    } catch {
-      Alert.alert('קישור לא תקין', 'לא ניתן לפתוח את הקישור.');
-    }
-  };
-
-  const openEditVideo = (video: WorkoutLink, categoryId: string) => {
-    setEditingVideo({ video, categoryId });
-    setEvTitle(video.title);
-    setEvUrl(video.url);
-    setEvCategory(categoryId);
-  };
-
-  const saveVideo = () => {
-    if (!editingVideo) return;
-    const url = evUrl.trim();
-    if (!url) {
-      Alert.alert('חסר קישור', 'הדבק קישור לסרטון.');
-      return;
-    }
-    const updated: WorkoutLink = {
-      ...editingVideo.video,
-      title: evTitle.trim() || 'סרטון כושר',
-      url,
-      platform: detectPlatform(url),
-    };
-    setCategories((prev) =>
-      prev.map((c) => {
-        let videos = c.videos.filter((v) => v.id !== updated.id);
-        if (c.id === evCategory) {
-          videos =
-            c.id === editingVideo.categoryId
-              ? c.videos.map((v) => (v.id === updated.id ? updated : v))
-              : [updated, ...videos];
-        }
-        return { ...c, videos };
-      })
-    );
-    setEditingVideo(null);
-  };
-
-  const deleteVideo = () => {
-    if (!editingVideo) return;
-    confirm('מחיקת סרטון', `למחוק את "${editingVideo.video.title}"?`, 'מחק', () => {
-      setCategories((prev) =>
-        prev.map((c) => ({ ...c, videos: c.videos.filter((v) => v.id !== editingVideo.video.id) }))
-      );
-      setEditingVideo(null);
-    });
-  };
+    setNotes((prev) => [item, ...prev]);
+    setActiveTab('notes');
+  }, []);
 
   // ---------- timer ----------
 
@@ -807,16 +613,9 @@ export default function App() {
 
   const pickAlarmTime = () => {
     if (!alarmForm) return;
-    const base = new Date();
-    base.setHours(alarmForm.hour, alarmForm.minute, 0, 0);
-    DateTimePickerAndroid.open({
-      value: base,
-      mode: 'time',
-      is24Hour: true,
-      onChange: (e, d) => {
-        if (e.type === 'set' && d) setAlarmForm((f) => (f ? { ...f, hour: d.getHours(), minute: d.getMinutes() } : f));
-      },
-    });
+    pickTimeWheels(alarmForm.hour, alarmForm.minute, (h, m) =>
+      setAlarmForm((f) => (f ? { ...f, hour: h, minute: m } : f))
+    );
   };
 
   const formattedTime = `${String(Math.floor(remainingSec / 60)).padStart(2, '0')}:${String(
@@ -955,7 +754,17 @@ export default function App() {
 
   const doExport = async () => {
     try {
-      await exportBackup({ notes, categories, areas: await loadAreas(), alarms });
+      await exportBackup({
+        notes,
+        categories: [],
+        groups: (await loadGroups()) ?? [],
+        tasks: await loadTasks(),
+        areas: await loadAreas(),
+        alarms,
+        docFolders: await loadDocFolders(),
+        sounds: await loadSounds(),
+        themeMode,
+      });
     } catch {
       Alert.alert('הגיבוי נכשל', 'לא הצלחתי ליצור את קובץ הגיבוי.');
     }
@@ -964,43 +773,36 @@ export default function App() {
   const doImport = async () => {
     const data = await pickBackup();
     if (!data) return;
+    const groups = data.groups.length ? data.groups : migrateCategories(data.categories);
     confirm(
       'שחזור מגיבוי',
-      `הגיבוי כולל ${data.notes.length} פתקים, ${data.categories.length} קבוצות שרירים, ${data.alarms.length} שעונים מעוררים ו-${data.areas.length} אזורים.\nהשחזור יחליף את כל המידע הנוכחי באפליקציה.`,
+      `הגיבוי כולל ${data.notes.length} פתקים, ${data.tasks.length} משימות, ${groups.length} קבוצות שרירים, ${data.alarms.length} שעונים מעוררים ו-${data.areas.length} אזורים.\nהשחזור יחליף את כל המידע הנוכחי באפליקציה.`,
       'שחזר',
       async () => {
         await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
-        for (const n of notes) cancelRing(noteRingId(n.id));
-        for (const a of alarms) cancelRing(alarmRingId(a.id));
+        for (const id of scheduledRingIds()) cancelRing(id);
         const restoredNotes: StickyNote[] = [];
         for (const n of data.notes) {
           let ok = false;
-          let notificationId: string | null = null;
           if (n.scheduleEnabled && !n.done) {
-            const r = await scheduleNoteReminder(
-              n.id, n.title, n.body, true, n.reminderMode ?? 'ring', n.scheduleDate, n.scheduleTime, null, true
-            );
-            ok = r.ok;
-            notificationId = r.notificationId;
+            ok = await scheduleNoteReminder(n.id, n.title, n.body, reminderFromNote(n), null, true);
           }
-          restoredNotes.push({
-            ...n,
-            notificationId,
-            scheduleEnabled: ok,
-            scheduleDate: ok ? n.scheduleDate : undefined,
-            scheduleTime: ok ? n.scheduleTime : undefined,
-          });
+          restoredNotes.push({ ...n, notificationId: null, scheduleEnabled: ok });
         }
         for (const a of data.alarms) await scheduleAlarmClock(a);
         await persistAlarms(data.alarms);
         setNotes(restoredNotes);
-        setCategories(data.categories);
-        setSelectedCategoryId(data.categories[0]?.id ?? '');
+        await saveGroups(groups);
+        await saveTasks(data.tasks);
+        await saveDocFolders(data.docFolders);
+        await saveSounds(data.sounds);
+        if (data.themeMode) setThemeMode(data.themeMode as ThemeMode);
         cancelRing(TIMER_RING_ID);
         setTimer((t) => ({ ...t, endAt: null, pausedRemainingSec: null, notificationId: null }));
         await persistAreas(data.areas, data.areas.map((a) => a.id));
+        setDataVersion((v) => v + 1);
         setSetupVisible(false);
-        Alert.alert('השחזור הושלם', 'כל המידע שוחזר מהגיבוי.');
+        Alert.alert('השחזור הושלם', 'כל המידע שוחזר מהגיבוי. תזכורות של משימות יופעלו מחדש כשתשמור אותן.');
       }
     );
   };
@@ -1009,7 +811,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+      <StatusBar style={dark ? 'light' : 'dark'} />
       <View style={styles.appHeader}>
         <Text style={styles.appTitle}>יומן ושולחן עבודה</Text>
         <TouchableOpacity onPress={() => setSetupVisible(true)} hitSlop={10} style={styles.gearBtn}>
@@ -1019,26 +821,37 @@ export default function App() {
       </View>
 
       <View style={styles.tabBar}>
-        {(
-          [
-            ['tasks', 'פתקים ומטלות'],
-            ['workouts', 'סרטוני כושר'],
-            ['alarms', 'טיימר ומיקום'],
-          ] as [MainTab, string][]
-        ).map(([key, label]) => (
+        {TABS.map(([key, icon, label]) => (
           <TouchableOpacity
             key={key}
             style={[styles.tabBtn, activeTab === key && styles.tabBtnActive]}
             onPress={() => setActiveTab(key)}
           >
+            <View>
+              <Text style={styles.tabIcon}>{icon}</Text>
+              {key === 'tasks' && tasksBadge > 0 ? (
+                <View style={styles.tabBadge}>
+                  <Text style={styles.tabBadgeText}>{tasksBadge}</Text>
+                </View>
+              ) : null}
+            </View>
             <Text style={[styles.tabText, activeTab === key && styles.tabTextActive]}>{label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
+      {activeTab === 'tasks' ? (
+        <TasksTab dataVersion={dataVersion} onCountChange={setTasksBadge} onConvertToNote={taskToNote} />
+      ) : null}
+      {activeTab === 'workouts' ? (
+        <WorkoutsTab dataVersion={dataVersion} shared={shared} onSharedUsed={onSharedUsed} />
+      ) : null}
+      {activeTab === 'docs' ? <DocsTab dataVersion={dataVersion} /> : null}
+
+      {activeTab === 'notes' || activeTab === 'alarms' ? (
       <ScrollView style={styles.desk} contentContainerStyle={styles.deskContent} keyboardShouldPersistTaps="handled">
-        {/* ---------- Tab 1: notes ---------- */}
-        {activeTab === 'tasks' && (
+        {/* ---------- notes ---------- */}
+        {activeTab === 'notes' && (
           <View>
             <View style={styles.topActionBar}>
               <Text style={styles.sectionTitle}>שולחן עבודה</Text>
@@ -1074,11 +887,7 @@ export default function App() {
                   <Text style={[styles.noteBody, note.done && styles.mutedText]} numberOfLines={4}>
                     {note.body}
                   </Text>
-                  {note.scheduleEnabled && note.scheduleDate && note.scheduleTime ? (
-                    <Text style={styles.scheduleTag}>
-                      {note.reminderMode === 'silent' ? '🔕' : '🔔'} {displayDate(note.scheduleDate)} {note.scheduleTime}
-                    </Text>
-                  ) : null}
+                  {reminderTag(note) ? <Text style={styles.scheduleTag}>{reminderTag(note)}</Text> : null}
                   <Text style={styles.noteDate}>
                     {note.done ? 'בוצע · ' : ''}
                     {formatHebrewDate(note.updatedAt)}
@@ -1086,119 +895,6 @@ export default function App() {
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
-        )}
-
-        {/* ---------- Tab 2: workouts ---------- */}
-        {activeTab === 'workouts' && (
-          <View>
-            <Text style={styles.sectionTitle}>קבוצות שרירים וסרטונים</Text>
-
-            {sharedBanner ? (
-              <View style={styles.sharedBanner}>
-                <Text style={styles.sharedBannerText}>
-                  התקבל קישור ששיתפת. בחר קבוצת שריר, תן שם ולחץ "שמור קישור".
-                </Text>
-              </View>
-            ) : null}
-
-            <View style={styles.card}>
-              <View style={styles.row}>
-                <TextInput
-                  style={[styles.input, styles.flex1, styles.noMargin]}
-                  placeholder="קבוצת שריר חדשה"
-                  value={newCategoryName}
-                  onChangeText={setNewCategoryName}
-                />
-                <TouchableOpacity style={styles.darkBtn} onPress={addCategory}>
-                  <Text style={styles.whiteBtnText}>הוסף</Text>
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {categories.map((cat) => (
-                  <View key={cat.id} style={styles.chipWrap}>
-                    <TouchableOpacity
-                      style={[styles.chip, cat.id === selectedCategoryId && styles.chipActive]}
-                      onPress={() => setSelectedCategoryId(cat.id)}
-                      onLongPress={() => removeCategory(cat)}
-                    >
-                      <Text style={[styles.chipText, cat.id === selectedCategoryId && styles.chipTextActive]}>
-                        {cat.name} ({cat.videos.length})
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => removeCategory(cat)} hitSlop={8}>
-                      <Text style={styles.removeX}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </ScrollView>
-            </View>
-
-            {activeCategory ? (
-              <View style={styles.card}>
-                <Text style={styles.subTitle}>סרטונים עבור: {activeCategory.name}</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="שם התרגיל / הסרטון"
-                  value={videoTitle}
-                  onChangeText={setVideoTitle}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="קישור ליוטיוב או פייסבוק"
-                  value={videoUrl}
-                  onChangeText={setVideoUrl}
-                  autoCapitalize="none"
-                  keyboardType="url"
-                />
-                <TouchableOpacity style={styles.darkBtn} onPress={addVideo}>
-                  <Text style={styles.whiteBtnText}>שמור קישור</Text>
-                </TouchableOpacity>
-                <Text style={styles.hintText}>
-                  טיפ: ביוטיוב או בפייסבוק לחץ "שיתוף" ובחר באפליקציה הזו, והקישור יגיע לכאן לבד.
-                </Text>
-
-                {activeCategory.videos.length === 0 ? (
-                  <Text style={styles.emptyText}>עדיין אין סרטונים בקבוצה הזו.</Text>
-                ) : null}
-
-                {activeCategory.videos.map((v) => {
-                  const yt = v.platform === 'youtube' ? youtubeId(v.url) : null;
-                  return (
-                    <View key={v.id} style={styles.videoItem}>
-                      <TouchableOpacity style={styles.videoMain} onPress={() => openVideo(v.url)}>
-                        {yt ? (
-                          <Image
-                            source={{ uri: `https://img.youtube.com/vi/${yt}/mqdefault.jpg` }}
-                            style={styles.thumb}
-                          />
-                        ) : (
-                          <View style={[styles.thumb, styles.thumbPlaceholder]}>
-                            <Text style={styles.thumbIcon}>{v.platform === 'facebook' ? 'f' : '▶'}</Text>
-                          </View>
-                        )}
-                        <View style={styles.flex1}>
-                          <Text style={styles.itemTitle} numberOfLines={2}>
-                            {v.title}
-                          </Text>
-                          <Text style={styles.itemSub}>
-                            {v.platform === 'youtube' ? 'YouTube' : v.platform === 'facebook' ? 'Facebook' : 'קישור'} · לחץ לצפייה
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.iconBtn}
-                        onPress={() => openEditVideo(v, activeCategory.id)}
-                        hitSlop={8}
-                      >
-                        <Text style={styles.iconBtnText}>✏️</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : null}
           </View>
         )}
 
@@ -1281,7 +977,7 @@ export default function App() {
               <Text style={styles.subTitle}>⏱️ טיימר ספירה לאחור</Text>
               <Text style={styles.timerText}>{formattedTime}</Text>
               <View style={styles.row}>
-                <TextInput
+                <TextInput placeholderTextColor={c.muted}
                   style={[styles.input, styles.flex1, styles.noMargin, styles.centerText]}
                   keyboardType="number-pad"
                   placeholder="דקות"
@@ -1289,7 +985,7 @@ export default function App() {
                   onChangeText={setTimerMinutes}
                 />
                 <Text style={styles.colon}>:</Text>
-                <TextInput
+                <TextInput placeholderTextColor={c.muted}
                   style={[styles.input, styles.flex1, styles.noMargin, styles.centerText]}
                   keyboardType="number-pad"
                   placeholder="שניות"
@@ -1316,29 +1012,19 @@ export default function App() {
           </View>
         )}
       </ScrollView>
+      ) : null}
 
       {/* ---------- popup: new note ---------- */}
       <PopupShell visible={createVisible} title="פתק צהוב חדש" onClose={() => setCreateVisible(false)}>
-        <TextInput style={styles.popupInput} placeholder="כותרת הפתק..." value={newTitle} onChangeText={setNewTitle} />
-        <TextInput
+        <TextInput placeholderTextColor={c.muted} style={styles.popupInput} placeholder="כותרת הפתק..." value={newTitle} onChangeText={setNewTitle} />
+        <TextInput placeholderTextColor={c.muted}
           style={[styles.popupInput, styles.popupTextarea]}
           placeholder="כתוב את המטלה או ההערה..."
           multiline
           value={newBody}
           onChangeText={setNewBody}
         />
-        <ScheduleEditor
-          open={newAdvOpen}
-          setOpen={setNewAdvOpen}
-          enabled={newSchedEnabled}
-          setEnabled={setNewSchedEnabled}
-          date={newSchedDate}
-          setDate={setNewSchedDate}
-          time={newSchedTime}
-          setTime={setNewSchedTime}
-          mode={newMode}
-          setMode={setNewMode}
-        />
+        <ReminderEditor value={newReminder} onChange={setNewReminder} />
         <TouchableOpacity style={styles.darkBtn} onPress={createNote}>
           <Text style={styles.whiteBtnText}>הדבק לשולחן העבודה</Text>
         </TouchableOpacity>
@@ -1346,26 +1032,15 @@ export default function App() {
 
       {/* ---------- popup: existing note ---------- */}
       <PopupShell visible={!!selectedNote} title="פרטי פתק" onClose={() => setSelectedNote(null)}>
-        <TextInput style={styles.popupInput} value={editTitle} onChangeText={setEditTitle} placeholder="כותרת" />
-        <TextInput
+        <TextInput placeholderTextColor={c.muted} style={styles.popupInput} value={editTitle} onChangeText={setEditTitle} placeholder="כותרת" />
+        <TextInput placeholderTextColor={c.muted}
           style={[styles.popupInput, styles.popupTextarea]}
           value={editBody}
           onChangeText={setEditBody}
           multiline
           placeholder="תוכן הפתק"
         />
-        <ScheduleEditor
-          open={editAdvOpen}
-          setOpen={setEditAdvOpen}
-          enabled={editSchedEnabled}
-          setEnabled={setEditSchedEnabled}
-          date={editSchedDate}
-          setDate={setEditSchedDate}
-          time={editSchedTime}
-          setTime={setEditSchedTime}
-          mode={editMode}
-          setMode={setEditMode}
-        />
+        <ReminderEditor value={editReminder} onChange={setEditReminder} />
         {selectedNote ? (
           <TouchableOpacity
             style={[styles.doneBtn, selectedNote.done && styles.doneBtnOn]}
@@ -1388,42 +1063,11 @@ export default function App() {
             <Text style={styles.whiteBtnText}>מחק</Text>
           </TouchableOpacity>
         </View>
-      </PopupShell>
-
-      {/* ---------- popup: edit video ---------- */}
-      <PopupShell visible={!!editingVideo} title="עריכת סרטון" onClose={() => setEditingVideo(null)} yellow={false}>
-        <TextInput style={styles.input} value={evTitle} onChangeText={setEvTitle} placeholder="שם הסרטון" />
-        <TextInput
-          style={styles.input}
-          value={evUrl}
-          onChangeText={setEvUrl}
-          placeholder="קישור"
-          autoCapitalize="none"
-          keyboardType="url"
-        />
-        <Text style={styles.label}>קבוצת שריר:</Text>
-        <View style={styles.chipsWrapRow}>
-          {categories.map((c) => (
-            <TouchableOpacity
-              key={c.id}
-              style={[styles.chip, styles.chipSpaced, c.id === evCategory && styles.chipActive]}
-              onPress={() => setEvCategory(c.id)}
-            >
-              <Text style={[styles.chipText, c.id === evCategory && styles.chipTextActive]}>{c.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.greenBtn} onPress={saveVideo}>
-            <Text style={styles.whiteBtnText}>שמור</Text>
+        {selectedNote ? (
+          <TouchableOpacity style={styles.toTaskBtn} onPress={() => noteToTask(selectedNote)}>
+            <Text style={styles.linkText}>✅ הפוך למשימה</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.blueBtnFlex} onPress={() => editingVideo && openVideo(editingVideo.video.url)}>
-            <Text style={styles.whiteBtnText}>צפה</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.redBtn} onPress={deleteVideo}>
-            <Text style={styles.whiteBtnText}>מחק</Text>
-          </TouchableOpacity>
-        </View>
+        ) : null}
       </PopupShell>
 
       {/* ---------- popup: area details ---------- */}
@@ -1436,7 +1080,7 @@ export default function App() {
         {areaForm ? (
           <>
             <Text style={styles.label}>שם האזור *</Text>
-            <TextInput
+            <TextInput placeholderTextColor={c.muted}
               style={styles.input}
               placeholder='למשל "בית", "עבודה", "סופר"'
               value={areaForm.label}
@@ -1465,7 +1109,7 @@ export default function App() {
                 : 'יצלצל בכניסה הבאה, ואז האזור ייכבה. אפשר להדליק אותו שוב במתג.'}
             </Text>
             <Text style={styles.label}>הערה (לא חובה)</Text>
-            <TextInput
+            <TextInput placeholderTextColor={c.muted}
               style={styles.input}
               placeholder='למשל "לקנות לחם"'
               value={areaForm.note}
@@ -1535,7 +1179,7 @@ export default function App() {
             </View>
 
             <Text style={styles.label}>שם (לא חובה)</Text>
-            <TextInput
+            <TextInput placeholderTextColor={c.muted}
               style={styles.input}
               placeholder='למשל "עבודה"'
               value={alarmForm.label}
@@ -1617,244 +1261,9 @@ export default function App() {
         }}
         onExport={doExport}
         onImport={doImport}
+        themeMode={themeMode}
+        onThemeMode={setThemeMode}
       />
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#EFECE4' },
-  appHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 8,
-    backgroundColor: '#FFFFFF',
-  },
-  appTitle: { fontSize: 20, fontWeight: '800', color: '#0F172A' },
-  gearBtn: { padding: 4 },
-  gearText: { fontSize: 22 },
-  gearDot: { position: 'absolute', top: 2, end: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: '#DC2626' },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#CBD5E1',
-  },
-  tabBtn: { flex: 1, paddingVertical: 13, alignItems: 'center' },
-  tabBtnActive: { borderBottomWidth: 3, borderBottomColor: '#0F172A' },
-  tabText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
-  tabTextActive: { color: '#0F172A', fontWeight: '800' },
-  desk: { flex: 1 },
-  deskContent: { padding: 14, paddingBottom: 48 },
-  topActionBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  sectionTitle: { fontSize: 19, fontWeight: '800', color: '#1E293B', marginBottom: 8 },
-  stickNoteBtn: {
-    backgroundColor: '#FACC15',
-    borderWidth: 1,
-    borderColor: '#CA8A04',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-  },
-  stickNoteBtnText: { color: '#422006', fontWeight: '800', fontSize: 14 },
-  emptyText: { color: '#64748B', fontSize: 14, marginVertical: 10 },
-  notesGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10 },
-  yellowNote: {
-    width: '48.5%',
-    backgroundColor: '#FEF08A',
-    borderRadius: 6,
-    padding: 12,
-    minHeight: 140,
-    justifyContent: 'space-between',
-    elevation: 3,
-  },
-  noteDone: { backgroundColor: '#E7E5E4', elevation: 1 },
-  noteTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  noteTitle: { flex: 1, fontSize: 15, fontWeight: '800', color: '#422006' },
-  strike: { textDecorationLine: 'line-through', color: '#78716C' },
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#A16207',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFBEB',
-  },
-  checkboxOn: { backgroundColor: '#15803D', borderColor: '#15803D' },
-  checkMark: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
-  noteBody: { fontSize: 13, color: '#713F12', flex: 1 },
-  mutedText: { color: '#78716C' },
-  scheduleTag: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400E',
-    backgroundColor: '#FDE047',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginTop: 6,
-    alignSelf: 'flex-start',
-  },
-  noteDate: { fontSize: 11, color: '#854D0E', marginTop: 6 },
-  card: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 12, marginBottom: 14, elevation: 2 },
-  subTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A', marginBottom: 6 },
-  row: { flexDirection: 'row', gap: 8, alignItems: 'center', marginBottom: 8 },
-  flex1: { flex: 1 },
-  label: { fontSize: 13, fontWeight: '700', color: '#334155', marginBottom: 4, marginTop: 4 },
-  input: {
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginBottom: 8,
-    backgroundColor: '#FFFFFF',
-    color: '#0F172A',
-  },
-  noMargin: { marginBottom: 0 },
-  centerText: { textAlign: 'center' },
-  colon: { fontSize: 20, fontWeight: '800', color: '#0F172A' },
-  darkBtn: {
-    backgroundColor: '#0F172A',
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  bigBtn: { paddingVertical: 14, marginVertical: 10 },
-  whiteBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
-  whiteBtnTextBig: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
-  grayBtn: { backgroundColor: '#E2E8F0', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8 },
-  grayBtnText: { color: '#0F172A', fontWeight: '700', fontSize: 13 },
-  greenBtn: { flex: 1, backgroundColor: '#15803D', paddingVertical: 11, borderRadius: 8, alignItems: 'center' },
-  blueBtnFlex: { flex: 1, backgroundColor: '#0284C7', paddingVertical: 11, borderRadius: 8, alignItems: 'center' },
-  redBtn: { flex: 1, backgroundColor: '#B91C1C', paddingVertical: 11, borderRadius: 8, alignItems: 'center' },
-  hintText: { fontSize: 12, color: '#64748B', marginTop: 6, marginBottom: 4, lineHeight: 17 },
-  sharedBanner: { backgroundColor: '#DBEAFE', borderRadius: 10, padding: 10, marginBottom: 10 },
-  sharedBannerText: { color: '#1E3A8A', fontWeight: '700', fontSize: 13 },
-  chipWrap: { flexDirection: 'row', alignItems: 'center', marginEnd: 10, marginTop: 4 },
-  chipsWrapRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
-  chip: { backgroundColor: '#F1F5F9', paddingVertical: 7, paddingHorizontal: 12, borderRadius: 20 },
-  chipSpaced: { marginEnd: 6, marginBottom: 6 },
-  chipActive: { backgroundColor: '#0F172A' },
-  chipText: { fontSize: 13, color: '#334155', fontWeight: '600' },
-  chipTextActive: { color: '#FFFFFF' },
-  removeX: { fontSize: 14, color: '#DC2626', fontWeight: '800', marginStart: 4 },
-  videoItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    gap: 8,
-  },
-  videoMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  thumb: { width: 96, height: 54, borderRadius: 6, backgroundColor: '#E2E8F0' },
-  thumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
-  thumbIcon: { fontSize: 22, fontWeight: '800', color: '#475569' },
-  iconBtn: { padding: 6 },
-  iconBtnText: { fontSize: 18 },
-  itemTitle: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
-  itemSub: { fontSize: 12, color: '#64748B' },
-  warnBox: { backgroundColor: '#FEF3C7', borderRadius: 8, padding: 10, marginTop: 10 },
-  warnText: { color: '#92400E', fontWeight: '700', fontSize: 13 },
-  areaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    gap: 8,
-  },
-  areaNote: { fontSize: 12, color: '#92400E', marginTop: 2 },
-  areaSummary: { backgroundColor: '#F8FAFC', borderRadius: 8, padding: 10, marginVertical: 8, gap: 6 },
-  linkText: { color: '#0284C7', fontWeight: '800', fontSize: 14 },
-  segment: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  segmentOn: { backgroundColor: '#0F172A', borderColor: '#0F172A' },
-  segmentText: { fontWeight: '700', color: '#334155' },
-  segmentTextOn: { color: '#FFFFFF' },
-  timerText: { fontSize: 46, fontWeight: '800', textAlign: 'center', color: '#0F172A', marginVertical: 8 },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 16,
-    paddingTop: 48,
-  },
-  popup: { borderRadius: 12, padding: 16, elevation: 8, maxHeight: '88%' },
-  popupYellow: { backgroundColor: '#FEF9C3' },
-  popupWhite: { backgroundColor: '#FFFFFF' },
-  popupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  popupTitle: { fontSize: 17, fontWeight: '800', color: '#422006' },
-  closeX: { fontSize: 20, fontWeight: '800', color: '#422006', padding: 4 },
-  popupInput: {
-    backgroundColor: '#FFFBEB',
-    borderWidth: 1,
-    borderColor: '#EAB308',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginBottom: 8,
-    color: '#1E293B',
-  },
-  popupTextarea: { minHeight: 100, textAlignVertical: 'top' },
-  advancedToggle: { paddingVertical: 6, marginBottom: 6 },
-  advancedToggleText: { fontSize: 13, fontWeight: '700', color: '#78350F' },
-  advancedBox: { backgroundColor: '#FEF08A', borderRadius: 8, padding: 10, marginBottom: 10 },
-  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  switchLabel: { fontSize: 13, fontWeight: '700', color: '#422006' },
-  pickerBtn: {
-    backgroundColor: '#FFFBEB',
-    borderWidth: 1,
-    borderColor: '#EAB308',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  pickerBtnText: { fontSize: 15, fontWeight: '700', color: '#422006' },
-  doneBtn: { backgroundColor: '#DCFCE7', borderRadius: 8, paddingVertical: 10, alignItems: 'center', marginBottom: 8 },
-  doneBtnOn: { backgroundColor: '#E7E5E4' },
-  doneBtnText: { color: '#166534', fontWeight: '800', fontSize: 14 },
-  actionRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  smallDarkBtn: { backgroundColor: '#0F172A', paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8 },
-  alarmItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    gap: 8,
-  },
-  alarmTime: { fontSize: 30, fontWeight: '800', color: '#0F172A' },
-  bigTimeBtn: { alignItems: 'center', paddingVertical: 10, backgroundColor: '#F1F5F9', borderRadius: 12, marginBottom: 10 },
-  bigTimeText: { fontSize: 52, fontWeight: '800', color: '#0F172A' },
-  daysRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  dayChip: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  dayChipOn: { backgroundColor: '#0F172A', borderColor: '#0F172A' },
-  dayChipText: { fontWeight: '800', color: '#334155' },
-  dayChipTextOn: { color: '#FFFFFF' },
-  switchRowPlain: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
-});

@@ -17,6 +17,17 @@ export interface RingSpec {
   daysMask: number; // bit0 = Sunday ... bit6 = Saturday; 0 = one-time
   hour: number;
   minute: number;
+  endAt?: number; // repeating rings stop after this time (0/undefined = never)
+  silent?: boolean; // ordinary notification instead of a full-screen ring
+}
+
+export interface DocEntry {
+  uri: string;
+  name: string;
+  mime: string;
+  isDir: boolean;
+  size: number;
+  modified: number;
 }
 
 type GeoAlarmNative = {
@@ -25,6 +36,11 @@ type GeoAlarmNative = {
   cancelRing(id: string): void;
   getScheduledRingIds(): string[];
   getSoundTitle(uri: string | null): string;
+  listDocuments(uri: string): Promise<DocEntry[]>;
+  documentFolderName(uri: string): string;
+  openDocument(uri: string, mime: string): boolean;
+  shareDocument(uri: string, mime: string): boolean;
+  releaseFolder(uri: string): void;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
   stopAlarm(): void;
   canUseFullScreenIntent(): boolean;
@@ -54,6 +70,17 @@ export const GeoAlarm = {
   scheduleRing: (spec: RingSpec) => safe(() => native!.scheduleRing(JSON.stringify(spec)), undefined),
   cancelRing: (id: string) => safe(() => native!.cancelRing(id), undefined),
   getScheduledRingIds: () => safe(() => native!.getScheduledRingIds(), [] as string[]),
+  listDocuments: async (uri: string): Promise<DocEntry[] | null> => {
+    try {
+      return native ? await native.listDocuments(uri) : [];
+    } catch {
+      return null; // permission lost or folder moved
+    }
+  },
+  documentFolderName: (uri: string) => safe(() => native!.documentFolderName(uri), 'תיקייה'),
+  openDocument: (uri: string, mime: string) => safe(() => native!.openDocument(uri, mime), false),
+  shareDocument: (uri: string, mime: string) => safe(() => native!.shareDocument(uri, mime), false),
+  releaseFolder: (uri: string) => safe(() => native!.releaseFolder(uri), undefined),
   getSoundTitle: (uri: string | null) => safe(() => native!.getSoundTitle(uri), 'ברירת מחדל'),
   pickSound: async (current: string | null, title: string) => {
     try {

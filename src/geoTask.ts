@@ -4,6 +4,7 @@ import { ringNow } from './rings';
 import {
   AlarmArea,
   loadAreas,
+  loadTasks,
   loadAreaStates,
   saveAreas,
   saveAreaStates,
@@ -53,13 +54,14 @@ TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK, async ({ data, error }) 
 
   const areas = await loadAreas();
   const area = areas.find((a) => a.id === id);
-  if (!area || !area.enabled || !wasOutside) {
+  const linkedTasks = (await loadTasks()).filter((t) => !t.done && t.areaId === id);
+  if (!area || !wasOutside || (!area.enabled && linkedTasks.length === 0)) {
     await saveAreaStates(states);
     return;
   }
 
   const now = Date.now();
-  if (area.mode === 'every' && prev.lastRingAt && now - prev.lastRingAt < EVERY_MODE_COOLDOWN_MS) {
+  if (prev.lastRingAt && now - prev.lastRingAt < EVERY_MODE_COOLDOWN_MS && (area.mode === 'every' || !area.enabled)) {
     await saveAreaStates(states);
     return;
   }
@@ -67,9 +69,12 @@ TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK, async ({ data, error }) 
   states[id] = { ...states[id], lastRingAt: now };
   await saveAreaStates(states);
 
-  await ringNow('geo', area.label || 'הגעת לאזור', area.note?.trim() || 'נכנסת לאזור שהגדרת');
+  const parts: string[] = [];
+  if (area.enabled && area.note?.trim()) parts.push(area.note.trim());
+  if (linkedTasks.length) parts.push('משימות: ' + linkedTasks.map((t) => t.title).join(', '));
+  await ringNow('geo', area.label || 'הגעת לאזור', parts.join('\n') || 'נכנסת לאזור שהגדרת');
 
-  if (area.mode === 'once') {
+  if (area.enabled && area.mode === 'once') {
     const updated = areas.map((a) => (a.id === id ? { ...a, enabled: false } : a));
     await saveAreas(updated);
     await syncGeofences(updated, { keepStates: true });
@@ -91,7 +96,9 @@ export async function syncGeofences(
       await saveAreaStates(states);
     }
 
-    const active = areas.filter((a) => a.enabled);
+    // Areas that are switched on, or that have open tasks linked to them.
+    const linked = new Set((await loadTasks()).filter((t) => !t.done && t.areaId).map((t) => t.areaId));
+    const active = areas.filter((a) => a.enabled || linked.has(a.id));
     const registered = await TaskManager.isTaskRegisteredAsync(GEOFENCE_TASK);
 
     if (active.length === 0) {

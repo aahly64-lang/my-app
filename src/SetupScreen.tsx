@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   AppState,
@@ -14,6 +14,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
+import { Palette, ThemeMode, useTheme } from './theme';
 import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
 
 const SOUND_ROWS: [SoundKind, string][] = [
@@ -28,6 +29,13 @@ interface Props {
   onClose: () => void;
   onExport: () => void;
   onImport: () => void;
+  themeMode: ThemeMode;
+  onThemeMode: (m: ThemeMode) => void;
+}
+
+function useStyles() {
+  const c = useTheme();
+  return useMemo(() => makeStyles(c), [c]);
 }
 
 interface Status {
@@ -87,6 +95,7 @@ function Step({
   button: string;
   onPress: () => void;
 }) {
+  const styles = useStyles();
   return (
     <View style={[styles.step, ok && styles.stepOk]}>
       <View style={styles.stepHeader}>
@@ -106,7 +115,8 @@ function Step({
   );
 }
 
-export default function SetupScreen({ visible, onClose, onExport, onImport }: Props) {
+export default function SetupScreen({ visible, onClose, onExport, onImport, themeMode, onThemeMode }: Props) {
+  const styles = useStyles();
   const [status, setStatus] = useState<Status>(EMPTY);
   const [sounds, setSounds] = useState<SoundSettings>({});
 
@@ -187,6 +197,25 @@ export default function SetupScreen({ visible, onClose, onExport, onImport }: Pr
           </TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={styles.content}>
+          <Text style={styles.section}>מראה</Text>
+          <View style={styles.themeRow}>
+            {(
+              [
+                ['auto', '📱 אוטומטי'],
+                ['light', '☀️ בהיר'],
+                ['dark', '🌙 כהה'],
+              ] as [ThemeMode, string][]
+            ).map(([m, label]) => (
+              <TouchableOpacity
+                key={m}
+                style={[styles.themeBtn, themeMode === m && styles.themeBtnOn]}
+                onPress={() => onThemeMode(m)}
+              >
+                <Text style={[styles.themeBtnText, themeMode === m && styles.themeBtnTextOn]}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
           <Text style={styles.section}>הרשאות לשעון המעורר לפי מיקום</Text>
           <Text style={styles.intro}>
             כדי שהשעון יצלצל גם כשהאפליקציה סגורה, צריך לאשר את כל השלבים. מספיק לעשות את זה פעם אחת.
@@ -279,67 +308,81 @@ export default function SetupScreen({ visible, onClose, onExport, onImport }: Pr
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#EFECE4' },
+const makeStyles = (c: Palette) =>
+  StyleSheet.create({
+  safe: { flex: 1, backgroundColor: c.bg },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: c.card,
     borderBottomWidth: 1,
-    borderBottomColor: '#CBD5E1',
+    borderBottomColor: c.border,
   },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: '#0F172A' },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: c.text },
   closeBtn: { padding: 6 },
-  closeText: { fontSize: 22, fontWeight: '800', color: '#0F172A' },
+  closeText: { fontSize: 22, fontWeight: '800', color: c.text },
   content: { padding: 14, paddingBottom: 48 },
-  section: { fontSize: 18, fontWeight: '800', color: '#1E293B', marginTop: 8, marginBottom: 6 },
-  intro: { fontSize: 14, color: '#475569', marginBottom: 12, lineHeight: 20 },
+  section: { fontSize: 18, fontWeight: '800', color: c.text, marginTop: 8, marginBottom: 6 },
+  intro: { fontSize: 14, color: c.text2, marginBottom: 12, lineHeight: 20 },
   allOk: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#15803D',
-    backgroundColor: '#DCFCE7',
+    color: c.okText,
+    backgroundColor: c.okBg,
     padding: 10,
     borderRadius: 8,
     marginBottom: 12,
   },
-  step: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2 },
-  stepOk: { backgroundColor: '#F0FDF4' },
+  step: { backgroundColor: c.card, borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2 },
+  stepOk: { backgroundColor: c.okBg },
   stepHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   stepNum: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#0F172A',
+    backgroundColor: c.accent,
     color: '#FFFFFF',
     textAlign: 'center',
     textAlignVertical: 'center',
     fontWeight: '800',
   },
-  stepTitle: { flex: 1, fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  stepTitle: { flex: 1, fontSize: 16, fontWeight: '800', color: c.text },
   badge: { fontSize: 12, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, overflow: 'hidden' },
   badgeOk: { backgroundColor: '#BBF7D0', color: '#166534' },
   badgeTodo: { backgroundColor: '#FEE2E2', color: '#991B1B' },
   badgeManual: { backgroundColor: '#FEF3C7', color: '#92400E' },
-  stepText: { fontSize: 14, color: '#334155', lineHeight: 20 },
-  stepBtn: { marginTop: 10, backgroundColor: '#0F172A', paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  stepText: { fontSize: 14, color: c.text2, lineHeight: 20 },
+  stepBtn: { marginTop: 10, backgroundColor: c.accent, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
   stepBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
   testBtn: { backgroundColor: '#DC2626', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginVertical: 14 },
   testBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
   soundRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: c.card,
     borderRadius: 10,
     padding: 12,
     marginBottom: 8,
     gap: 8,
   },
-  soundName: { maxWidth: '55%', fontSize: 13, color: '#0284C7', fontWeight: '700' },
+  soundName: { maxWidth: '55%', fontSize: 13, color: c.link, fontWeight: '700' },
   backupBtn: { backgroundColor: '#0284C7', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
   backupBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
-  restoreBtn: { backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#0284C7' },
-  restoreText: { color: '#0284C7' },
+  restoreBtn: { backgroundColor: c.card, borderWidth: 2, borderColor: c.link },
+  restoreText: { color: c.link },
+  themeRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  themeBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.card,
+    alignItems: 'center',
+  },
+  themeBtnOn: { backgroundColor: c.accent, borderColor: c.accent },
+  themeBtnText: { fontWeight: '800', color: c.text },
+  themeBtnTextOn: { color: '#FFFFFF' },
 });

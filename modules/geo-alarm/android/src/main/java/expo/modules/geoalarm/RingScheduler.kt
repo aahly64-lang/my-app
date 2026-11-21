@@ -11,7 +11,8 @@ import java.util.Calendar
  * A "ring" is a scheduled full-screen alarm (timer, note reminder, alarm clock, snooze).
  * JSON fields: id, at (epoch ms), title, body, kind, sound (uri or ""), durationMs,
  * snoozeMin (0 = no snooze), snoozeLeft (-1 = unlimited), daysMask (bit0 = Sunday ... bit6 = Saturday,
- * 0 = not repeating), hour, minute.
+ * 0 = not repeating), hour, minute, endAt (epoch ms, 0 = no end; repeating rings stop after it),
+ * silent (true = ordinary notification instead of a full-screen ring).
  */
 object RingScheduler {
   private const val PREFS = "geo_alarm_rings_v1"
@@ -108,6 +109,13 @@ object RingScheduler {
     val daysMask = ring.optInt("daysMask", 0)
     if (daysMask != 0) {
       val next = computeNext(ring.optInt("hour"), ring.optInt("minute"), daysMask, System.currentTimeMillis() + 1000)
+      val endAt = ring.optLong("endAt", 0L)
+      if (endAt > 0 && next > endAt) {
+        val all = load(ctx)
+        all.remove(id)
+        store(ctx, all)
+        return
+      }
       ring.put("at", next)
       schedule(ctx, ring)
     } else {
@@ -148,6 +156,11 @@ object RingScheduler {
       if (at <= now) {
         if (daysMask != 0) {
           at = computeNext(ring.optInt("hour"), ring.optInt("minute"), daysMask, now)
+          val endAt = ring.optLong("endAt", 0L)
+          if (endAt > 0 && at > endAt) {
+            toRemove.add(id)
+            continue
+          }
           ring.put("at", at)
         } else if (now - at < 10 * 60_000L) {
           at = now + 5_000L // missed by a few minutes (e.g. during reboot): ring shortly

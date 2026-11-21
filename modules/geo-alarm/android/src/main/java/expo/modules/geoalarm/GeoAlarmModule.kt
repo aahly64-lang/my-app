@@ -75,6 +75,27 @@ class GeoAlarmModule : Module() {
       RingScheduler.ids(context)
     }
 
+    AsyncFunction("listDocuments") { uri: String ->
+      DocumentsHelper.list(context, uri)
+    }
+
+    Function("documentFolderName") { uri: String ->
+      DocumentsHelper.name(context, uri)
+    }
+
+    Function("openDocument") { uri: String, mime: String ->
+      DocumentsHelper.open(context, uri, mime)
+    }
+
+    Function("shareDocument") { uri: String, mime: String ->
+      DocumentsHelper.share(context, uri, mime)
+    }
+
+    Function("releaseFolder") { uri: String ->
+      DocumentsHelper.release(context, uri)
+      Unit
+    }
+
     Function("getSoundTitle") { uri: String? ->
       soundTitle(uri)
     }

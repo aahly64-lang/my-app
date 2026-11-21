@@ -90,3 +90,43 @@ export function untilText(at: number): string {
   if (h >= 1) return `בעוד ${h} שעות ו-${m} דקות`;
   return `בעוד ${m} דקות`;
 }
+
+// ---------- v4: generic reminders (notes & tasks), once or repeating ----------
+
+export interface ReminderSpec {
+  id: string;
+  title: string;
+  body: string;
+  silent: boolean;
+  once?: { at: number };
+  repeat?: { days: number[]; hour: number; minute: number; endAt: number };
+}
+
+/** Schedules a reminder. Returns false when there is no future occurrence. */
+export async function scheduleReminder(spec: ReminderSpec): Promise<boolean> {
+  cancelRing(spec.id);
+  let at = 0;
+  if (spec.once) at = spec.once.at;
+  if (spec.repeat) at = nextAlarmTime(spec.repeat.hour, spec.repeat.minute, spec.repeat.days);
+  if (!at || at <= Date.now()) return false;
+  if (spec.repeat && spec.repeat.endAt && at > spec.repeat.endAt) return false;
+  GeoAlarm.scheduleRing({
+    id: spec.id,
+    at,
+    title: spec.title,
+    body: spec.body,
+    kind: 'reminder',
+    sound: await soundFor('reminder'),
+    durationMs: RING_DURATION_MS.reminder,
+    snoozeMin: 0,
+    snoozeLeft: 0,
+    daysMask: spec.repeat ? daysMask(spec.repeat.days) : 0,
+    hour: spec.repeat?.hour ?? 0,
+    minute: spec.repeat?.minute ?? 0,
+    endAt: spec.repeat?.endAt ?? 0,
+    silent: spec.silent,
+  });
+  return true;
+}
+
+export const taskRingId = (taskId: string) => `task:${taskId}`;

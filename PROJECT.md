@@ -91,3 +91,7 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 
 ### כללי
 30. גיבוי/שחזור כולל משימות, קבוצות כושר והגדרות (לא את קבצי המסמכים – רק רשימת התיקיות).
+
+## סטטוס
+- גרסה 4 (שלב א' + שלב ב') נבנתה במלואה ב-21/11/2026 – ממתינה לבדיקה של אבי בטלפון.
+- קבצים חדשים: src/theme.ts, src/appStyles.ts, src/ui.tsx, src/pickers.ts, src/WorkoutsTab.tsx, src/TasksTab.tsx, src/DocsTab.tsx, modules/geo-alarm/.../DocumentsHelper.kt.

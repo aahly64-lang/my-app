@@ -85,7 +85,40 @@ object AlarmNotifier {
     show(context, ring)
   }
 
+  private const val SILENT_CHANNEL = "reminders_silent_v1"
+  private const val SILENT_BASE_ID = 47000
+
+  /** Ordinary (non-ringing) reminder notification. */
+  private fun showSilent(context: Context, ring: JSONObject) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      if (manager.getNotificationChannel(SILENT_CHANNEL) == null) {
+        manager.createNotificationChannel(
+          NotificationChannel(SILENT_CHANNEL, "תזכורות שקטות", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+      }
+    }
+    val launch = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: Intent()
+    val pi = PendingIntent.getActivity(context, 9, launch, pendingFlags())
+    val notification = NotificationCompat.Builder(context, SILENT_CHANNEL)
+      .setSmallIcon(context.applicationInfo.icon)
+      .setContentTitle(ring.optString("title", "תזכורת"))
+      .setContentText(ring.optString("body", ""))
+      .setStyle(NotificationCompat.BigTextStyle().bigText(ring.optString("body", "")))
+      .setContentIntent(pi)
+      .setAutoCancel(true)
+      .build()
+    try {
+      NotificationManagerCompat.from(context).notify(SILENT_BASE_ID + (ring.optString("id").hashCode() and 0xFFF), notification)
+    } catch (e: SecurityException) {
+    }
+  }
+
   fun show(context: Context, ring: JSONObject) {
+    if (ring.optBoolean("silent", false)) {
+      showSilent(context, ring)
+      return
+    }
     val sound = soundUri(ring)
     val channelId = ensureChannel(context, sound)
     maxAlarmVolume(context)

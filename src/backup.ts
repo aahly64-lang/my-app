@@ -2,13 +2,28 @@ import { Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
-import { AlarmArea, AlarmClock, MuscleCategory, StickyNote, localDateString } from './storage';
+import {
+  AlarmArea,
+  AlarmClock,
+  DocFolder,
+  MuscleCategory,
+  SoundSettings,
+  StickyNote,
+  Task,
+  WorkoutGroup,
+  localDateString,
+} from './storage';
 
 export interface BackupData {
   notes: StickyNote[];
   categories: MuscleCategory[];
   areas: AlarmArea[];
   alarms: AlarmClock[];
+  groups: WorkoutGroup[];
+  tasks: Task[];
+  docFolders: DocFolder[];
+  sounds: SoundSettings;
+  themeMode?: string;
 }
 
 const BACKUP_APP_ID = 'avi-personal-board';
@@ -51,6 +66,11 @@ export async function pickBackup(): Promise<BackupData | null> {
       categories: Array.isArray(parsed.categories) ? parsed.categories : [],
       areas: Array.isArray(parsed.areas) ? parsed.areas : [],
       alarms: Array.isArray(parsed.alarms) ? parsed.alarms : [],
+      groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+      tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+      docFolders: Array.isArray(parsed.docFolders) ? parsed.docFolders : [],
+      sounds: parsed.sounds && typeof parsed.sounds === 'object' ? parsed.sounds : {},
+      themeMode: typeof parsed.themeMode === 'string' ? parsed.themeMode : undefined,
     };
   } catch {
     Alert.alert('השחזור נכשל', 'לא הצלחתי לקרוא את קובץ הגיבוי.');
