@@ -54,6 +54,10 @@ export interface AlarmArea {
 export interface AreaRuntimeState {
   inside?: 'inside' | 'outside';
   lastRingAt?: number;
+  /** Precise areas: inside the large approach zone around the point. */
+  approach?: 'inside' | 'outside';
+  /** Precise areas: close tracking should run (approaching, not yet inside the point). */
+  armed?: boolean;
 }
 
 export interface BoardState {

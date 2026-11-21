@@ -14,7 +14,7 @@ import {
 export const GEOFENCE_TASK = 'avi-geofence-alarm-task';
 
 /** Minimum time between two rings of the same area in "every" mode. */
-const EVERY_MODE_COOLDOWN_MS = 15 * 60 * 1000;
+const EVERY_MODE_COOLDOWN_MS = 8 * 60 * 1000;
 
 /** Minimum radius allowed by the map picker. */
 export const MIN_RADIUS_M = 150;
@@ -25,24 +25,37 @@ type GeofenceTaskData = {
   region: Location.LocationRegion;
 };
 
-/** Background task for "precise" areas: the app follows the position itself. */
+/**
+ * Precise areas
+ * -------------
+ * Around every precise area there is a second, large "approach" geofence (~4 km).
+ * - Entering the approach zone turns on close tracking (location every ~10 s,
+ *   with the "📍 מעקב אזורים פעיל" notification).
+ * - Entering the point itself (rang or not) turns close tracking off.
+ * - Leaving the point (still inside the approach zone) turns it on again,
+ *   ready for a return.
+ * - Leaving the approach zone turns everything off.
+ * Android allows starting the tracking service from the background only right
+ * after a geofence event, which is exactly when we start it.
+ */
 export const PRECISE_TASK = 'avi-precise-location-task';
+const APPROACH_PREFIX = 'approach:';
+const APPROACH_M = 4000;
 
-type Tier = 'far' | 'mid' | 'near';
-let currentTier: Tier | null = null;
+const approachRadius = (a: AlarmArea) => Math.max(APPROACH_M, Math.max(MIN_RADIUS_M, a.radiusMeters) + 1500);
 
-/** How often to check, depending on the distance to the nearest precise area edge. */
-const TIERS: Record<Tier, Location.LocationTaskOptions> = {
-  far: { accuracy: Location.Accuracy.Balanced, timeInterval: 3 * 60 * 1000, distanceInterval: 200 },
-  mid: { accuracy: Location.Accuracy.High, timeInterval: 45 * 1000, distanceInterval: 50 },
-  near: { accuracy: Location.Accuracy.High, timeInterval: 10 * 1000, distanceInterval: 10 },
+const CLOSE_OPTIONS: Location.LocationTaskOptions = {
+  accuracy: Location.Accuracy.High,
+  timeInterval: 10 * 1000,
+  distanceInterval: 10,
+  pausesUpdatesAutomatically: false,
+  foregroundService: {
+    notificationTitle: '📍 מעקב אזורים פעיל',
+    notificationBody: 'אתה מתקרב לאזור במצב מדויק – בודק מיקום כדי לצלצל בזמן',
+    notificationColor: '#FFD60A',
+    killServiceOnDestroy: false,
+  },
 };
-
-function tierFor(gapM: number): Tier {
-  if (gapM > 3000) return 'far';
-  if (gapM > 600) return 'mid';
-  return 'near';
-}
 
 /** Serialises enter/exit handling so the geofence and precise tasks can't ring twice. */
 let chain: Promise<unknown> = Promise.resolve();
@@ -52,12 +65,55 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Areas that should be watched: switched on, or with open tasks linked to them. */
+async function activeAreas(areas: AlarmArea[]) {
+  const linked = new Set((await loadTasks()).filter((t) => !t.done && t.areaId).map((t) => t.areaId));
+  return areas.filter((a) => a.enabled || linked.has(a.id));
+}
+
+async function isCloseRunning() {
+  try {
+    return await Location.hasStartedLocationUpdatesAsync(PRECISE_TASK);
+  } catch {
+    return false;
+  }
+}
+
+/** Turns close tracking on or off according to the current states. */
+async function updateClose(reasonLabel?: string) {
+  const states = await loadAreaStates();
+  const precise = (await activeAreas(await loadAreas())).filter((a) => a.precise);
+  const want = precise.filter((a) => states[a.id]?.approach === 'inside' && states[a.id]?.armed);
+  const running = await isCloseRunning();
+  const label = reasonLabel || want[0]?.label || 'מעקב צמוד';
+
+  if (want.length > 0 && !running) {
+    try {
+      await Location.startLocationUpdatesAsync(PRECISE_TASK, CLOSE_OPTIONS);
+      await addGeoLog({ label, kind: 'start', text: 'מעקב צמוד הופעל', ok: true });
+    } catch (e: any) {
+      await addGeoLog({
+        label,
+        kind: 'problem',
+        text: 'מעקב צמוד לא הופעל (המנגנון הרגיל ימשיך לעבוד): ' + (e?.message ?? ''),
+      });
+    }
+  } else if (want.length === 0 && running) {
+    try {
+      await Location.stopLocationUpdatesAsync(PRECISE_TASK);
+    } catch {
+      // already stopped
+    }
+    await addGeoLog({ label, kind: 'start', text: 'מעקב צמוד כובה' });
+  }
+}
+
 /**
  * Ring rules:
  * - Ring only on a real transition outside -> inside. When an area is created/edited
  *   the app checks the current position and records inside/outside right away, so if
  *   you are already inside it does not ring; it rings the next time you enter.
- * - "every" mode: ring again only after leaving and at least 15 minutes after the last ring.
+ * - "every" mode: ring again only after leaving and at least 8 minutes after the last ring.
  * - "once" mode: after ringing, the area is switched off.
  * - source 'precise' only acts (and logs) when the state actually changes.
  */
@@ -72,15 +128,16 @@ function handleTransition(id: string, kind: 'enter' | 'exit', source: 'geofence'
 
     if (kind === 'exit') {
       if (source === 'precise' && prev.inside === 'outside') return;
-      states[id] = { ...prev, inside: 'outside' };
+      states[id] = { ...prev, inside: 'outside', armed: prev.approach === 'inside' };
       await saveAreaStates(states);
       await addGeoLog({ label, kind: 'exit', text: 'יצאת מהאזור' + tag });
+      if (area?.precise) await updateClose(label);
       return;
     }
 
     if (source === 'precise' && prev.inside === 'inside') return;
 
-    states[id] = { ...prev, inside: 'inside' };
+    states[id] = { ...prev, inside: 'inside', armed: false };
     const linkedTasks = (await loadTasks()).filter((t) => !t.done && t.areaId === id);
 
     let skip: string | null = null;
@@ -93,11 +150,12 @@ function handleTransition(id: string, kind: 'enter' | 'exit', source: 'geofence'
       Date.now() - prev.lastRingAt < EVERY_MODE_COOLDOWN_MS &&
       (area.mode === 'every' || !area.enabled)
     )
-      skip = 'צלצל לפני פחות מ-15 דקות';
+      skip = 'צלצל לפני פחות מ-8 דקות';
 
     if (skip || !area) {
       await saveAreaStates(states);
       await addGeoLog({ label, kind: 'enter', text: 'נכנסת' + tag + ' · לא צלצל: ' + skip, ok: false });
+      if (area?.precise) await updateClose(label);
       return;
     }
 
@@ -118,7 +176,32 @@ function handleTransition(id: string, kind: 'enter' | 'exit', source: 'geofence'
       const updated = areas.map((a) => (a.id === id ? { ...a, enabled: false } : a));
       await saveAreas(updated);
       await syncGeofences(updated, { keepStates: true });
+    } else if (area.precise) {
+      await updateClose(label);
     }
+  });
+}
+
+/** Entering / leaving the large approach zone around a precise area. */
+function handleApproach(id: string, kind: 'enter' | 'exit') {
+  return serial(async () => {
+    const states = await loadAreaStates();
+    const prev = states[id] ?? {};
+    const area = (await loadAreas()).find((a) => a.id === id);
+    if (!area) return;
+    const label = area.label || 'אזור';
+    if (kind === 'enter') {
+      if (prev.approach === 'inside' && prev.armed === (prev.inside !== 'inside')) return;
+      states[id] = { ...prev, approach: 'inside', armed: prev.inside !== 'inside' };
+      await saveAreaStates(states);
+      if (prev.approach !== 'inside') await addGeoLog({ label, kind: 'start', text: 'התקרבת לאזור' });
+    } else {
+      if (prev.approach === 'outside') return;
+      states[id] = { ...prev, approach: 'outside', armed: false };
+      await saveAreaStates(states);
+      await addGeoLog({ label, kind: 'start', text: 'התרחקת מהאזור' });
+    }
+    await updateClose(label);
   });
 }
 
@@ -129,100 +212,38 @@ TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK, async ({ data, error }) 
   }
   if (!data) return;
   const { eventType, region } = data;
-  const id = region.identifier;
-  if (!id) return;
-  if (eventType === Location.GeofencingEventType.Exit) await handleTransition(id, 'exit', 'geofence');
-  else if (eventType === Location.GeofencingEventType.Enter) await handleTransition(id, 'enter', 'geofence');
+  const rid = region.identifier;
+  if (!rid) return;
+  const kind =
+    eventType === Location.GeofencingEventType.Enter
+      ? 'enter'
+      : eventType === Location.GeofencingEventType.Exit
+        ? 'exit'
+        : null;
+  if (!kind) return;
+  if (rid.startsWith(APPROACH_PREFIX)) await handleApproach(rid.slice(APPROACH_PREFIX.length), kind);
+  else await handleTransition(rid, kind, 'geofence');
 });
-
-/** Areas that should be watched: switched on, or with open tasks linked to them. */
-async function activeAreas(areas: AlarmArea[]) {
-  const linked = new Set((await loadTasks()).filter((t) => !t.done && t.areaId).map((t) => t.areaId));
-  return areas.filter((a) => a.enabled || linked.has(a.id));
-}
 
 TaskManager.defineTask<{ locations: Location.LocationObject[] }>(PRECISE_TASK, async ({ data, error }) => {
   if (error || !data?.locations?.length) return;
   const loc = data.locations[data.locations.length - 1];
-  const precise = (await activeAreas(await loadAreas())).filter((a) => a.precise);
+  const states = await loadAreaStates();
+  const precise = (await activeAreas(await loadAreas())).filter(
+    (a) => a.precise && states[a.id]?.approach === 'inside' && states[a.id]?.armed
+  );
   if (precise.length === 0) {
-    await stopPrecise();
+    await serial(() => updateClose());
     return;
   }
   const acc = loc.coords.accuracy ?? 50;
-  let gap = Infinity;
   for (const a of precise) {
     const r = Math.max(MIN_RADIUS_M, a.radiusMeters);
     const d = distanceM(loc.coords.latitude, loc.coords.longitude, a.latitude, a.longitude);
-    gap = Math.min(gap, d - r);
     if (d <= r && acc <= Math.max(100, r)) await handleTransition(a.id, 'enter', 'precise');
     else if (d > r + Math.max(40, Math.min(acc, 150))) await handleTransition(a.id, 'exit', 'precise');
   }
-  const tier = tierFor(gap);
-  if (tier !== currentTier) await startPrecise(tier);
 });
-
-async function startPrecise(tier: Tier) {
-  try {
-    await Location.startLocationUpdatesAsync(PRECISE_TASK, {
-      ...TIERS[tier],
-      pausesUpdatesAutomatically: false,
-      foregroundService: {
-        notificationTitle: '📍 מעקב אזורים פעיל',
-        notificationBody: 'מצב מדויק: בודק מיקום כדי לצלצל בזמן בכניסה לאזור',
-        notificationColor: '#FFD60A',
-        killServiceOnDestroy: false,
-      },
-    });
-    currentTier = tier;
-  } catch (e: any) {
-    currentTier = null;
-    await addGeoLog({ label: 'מערכת', kind: 'problem', text: 'הפעלת מצב מדויק נכשלה: ' + (e?.message ?? '') });
-  }
-}
-
-async function stopPrecise() {
-  currentTier = null;
-  try {
-    if (await Location.hasStartedLocationUpdatesAsync(PRECISE_TASK)) {
-      await Location.stopLocationUpdatesAsync(PRECISE_TASK);
-    }
-  } catch {
-    // not running
-  }
-}
-
-/** Starts / adjusts / stops precise tracking according to the active areas. */
-async function syncPrecise(active: AlarmArea[]) {
-  const precise = active.filter((a) => a.precise);
-  if (precise.length === 0) {
-    await stopPrecise();
-    return;
-  }
-  let tier: Tier = 'mid';
-  try {
-    const last = await Location.getLastKnownPositionAsync({ maxAge: 15 * 60 * 1000 });
-    if (last) {
-      const gap = Math.min(
-        ...precise.map(
-          (a) =>
-            distanceM(last.coords.latitude, last.coords.longitude, a.latitude, a.longitude) -
-            Math.max(MIN_RADIUS_M, a.radiusMeters)
-        )
-      );
-      tier = tierFor(gap);
-    }
-  } catch {
-    // keep 'mid'
-  }
-  let running = false;
-  try {
-    running = await Location.hasStartedLocationUpdatesAsync(PRECISE_TASK);
-  } catch {
-    running = false;
-  }
-  if (!running || tier !== currentTier) await startPrecise(tier);
-}
 
 /** Distance in meters between two points. */
 function distanceM(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -242,7 +263,7 @@ function distanceM(lat1: number, lon1: number, lat2: number, lon2: number) {
  */
 async function resolveUnknownStates(active: AlarmArea[]) {
   const states = await loadAreaStates();
-  const unknown = active.filter((a) => !states[a.id]?.inside);
+  const unknown = active.filter((a) => !states[a.id]?.inside || (a.precise && !states[a.id]?.approach));
   if (unknown.length === 0) return;
 
   let pos: Location.LocationObject | null = null;
@@ -269,10 +290,17 @@ async function resolveUnknownStates(active: AlarmArea[]) {
 
   const fresh = await loadAreaStates();
   for (const a of unknown) {
-    if (fresh[a.id]?.inside) continue; // an event arrived meanwhile
     const d = distanceM(pos.coords.latitude, pos.coords.longitude, a.latitude, a.longitude);
+    if (a.precise && !fresh[a.id]?.approach) {
+      const near = d <= approachRadius(a);
+      const pointInside = fresh[a.id]?.inside
+        ? fresh[a.id]?.inside === 'inside'
+        : d <= Math.max(MIN_RADIUS_M, a.radiusMeters);
+      fresh[a.id] = { ...fresh[a.id], approach: near ? 'inside' : 'outside', armed: near && !pointInside };
+    }
+    if (fresh[a.id]?.inside) continue; // an event arrived meanwhile
     const inside = d <= Math.max(MIN_RADIUS_M, a.radiusMeters);
-    fresh[a.id] = { ...fresh[a.id], inside: inside ? 'inside' : 'outside' };
+    fresh[a.id] = { ...fresh[a.id], inside: inside ? 'inside' : 'outside', armed: !inside && fresh[a.id]?.approach === 'inside' };
     await addGeoLog({
       label: a.label || 'אזור',
       kind: 'start',
@@ -305,7 +333,7 @@ export async function syncGeofences(
 
     if (active.length === 0) {
       if (registered) await Location.stopGeofencingAsync(GEOFENCE_TASK);
-      await stopPrecise();
+      await serial(() => updateClose());
       return 'ok';
     }
 
@@ -322,18 +350,38 @@ export async function syncGeofences(
 
     await resolveUnknownStates(active);
 
-    await Location.startGeofencingAsync(
-      GEOFENCE_TASK,
-      active.map((a) => ({
+    // Precise areas that are no longer precise lose their approach state.
+    const st = await loadAreaStates();
+    let changed = false;
+    for (const a of active)
+      if (!a.precise && (st[a.id]?.approach || st[a.id]?.armed)) {
+        st[a.id] = { ...st[a.id], approach: undefined, armed: undefined };
+        changed = true;
+      }
+    if (changed) await saveAreaStates(st);
+
+    const regions: Location.LocationRegion[] = [];
+    for (const a of active) {
+      regions.push({
         identifier: a.id,
         latitude: a.latitude,
         longitude: a.longitude,
         radius: Math.max(MIN_RADIUS_M, a.radiusMeters),
         notifyOnEnter: true,
         notifyOnExit: true,
-      }))
-    );
-    await syncPrecise(active);
+      });
+      if (a.precise)
+        regions.push({
+          identifier: APPROACH_PREFIX + a.id,
+          latitude: a.latitude,
+          longitude: a.longitude,
+          radius: approachRadius(a),
+          notifyOnEnter: true,
+          notifyOnExit: true,
+        });
+    }
+    await Location.startGeofencingAsync(GEOFENCE_TASK, regions);
+    await serial(() => updateClose());
     return 'ok';
   } catch (e: any) {
     await addGeoLog({ label: 'מערכת', kind: 'problem', text: 'הפעלת מעקב האזורים נכשלה: ' + (e?.message ?? '') });
