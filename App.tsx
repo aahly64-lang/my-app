@@ -82,8 +82,8 @@ import {
 type MainTab = 'notes' | 'tasks' | 'workouts' | 'alarms' | 'docs';
 
 const TABS: [MainTab, string, string][] = [
-  ['notes', 'file-text', 'פתקים'],
   ['tasks', 'check-square', 'משימות'],
+  ['notes', 'file-text', 'פתקים'],
   ['workouts', 'dumbbell', 'כושר'],
   ['alarms', 'clock', 'שעונים'],
   ['docs', 'folder', 'מסמכים'],
@@ -239,7 +239,7 @@ function AppInner({
 }) {
   const styles = useAppStyles();
   const c = useTheme();
-  const [activeTab, setActiveTab] = useState<MainTab>('notes');
+  const [activeTab, setActiveTab] = useState<MainTab>('tasks');
   const [dataVersion, setDataVersion] = useState(0);
   const [tasksBadge, setTasksBadge] = useState(0);
   const [shared, setShared] = useState<SharedLink | null>(null);
@@ -288,6 +288,7 @@ function AppInner({
     label: string;
     mode: AreaMode;
     note: string;
+    precise: boolean;
     moved: boolean;
   } | null>(null);
   const pendingFormRef = useRef<typeof areaForm>(null);
@@ -707,7 +708,7 @@ function AppInner({
       setAreaForm({ ...pending, sel, moved: true });
       pendingFormRef.current = null;
     } else {
-      setAreaForm({ id: null, sel, label: '', mode: 'every', note: '', moved: true });
+      setAreaForm({ id: null, sel, label: '', mode: 'every', note: '', precise: false, moved: true });
     }
   };
 
@@ -726,6 +727,7 @@ function AppInner({
       label: a.label,
       mode: a.mode,
       note: a.note ?? '',
+      precise: !!a.precise,
       moved: false,
     });
   };
@@ -752,6 +754,7 @@ function AppInner({
       radiusMeters: Math.max(MIN_RADIUS_M, areaForm.sel.radius),
       mode: areaForm.mode,
       note: areaForm.note.trim() || undefined,
+      precise: areaForm.precise || undefined,
     };
     let next: AlarmArea[];
     let resetIds: string[] = [];
@@ -1014,6 +1017,7 @@ function AppInner({
                     <Text style={[styles.itemTitle, !a.enabled && styles.mutedText]}>{a.label}</Text>
                     <Text style={styles.itemSub}>
                       {a.mode === 'once' ? 'חד-פעמי' : 'בכל כניסה'} · רדיוס {formatRadius(a.radiusMeters)}
+                      {a.precise ? ' · 🎯 מדויק' : ''}
                       {a.mode === 'once' && !a.enabled ? ' · צלצל וכבה' : ''}
                     </Text>
                     {a.note ? (
@@ -1164,6 +1168,17 @@ function AppInner({
                 ? 'יצלצל בכל כניסה לאזור (לכל היותר פעם ב-15 דקות).'
                 : 'יצלצל בכניסה הבאה, ואז האזור ייכבה. אפשר להדליק אותו שוב במתג.'}
             </Text>
+            <View style={styles.preciseRow}>
+              <View style={styles.flex1}>
+                <Text style={styles.preciseTitle}>🎯 מצב מדויק</Text>
+                <Text style={styles.hintText}>
+                  {areaForm.precise
+                    ? 'יצלצל כמעט מיד בכניסה. צורך יותר סוללה, ותופיע התראה קבועה "מעקב אזורים פעיל".'
+                    : 'כבוי: חוסך סוללה, אבל הצלצול יכול להתעכב כמה דקות.'}
+                </Text>
+              </View>
+              <Switch value={areaForm.precise} onValueChange={(v) => setAreaForm({ ...areaForm, precise: v })} />
+            </View>
             <Text style={styles.label}>הערה (לא חובה)</Text>
             <TextInput placeholderTextColor={c.muted}
               style={styles.input}

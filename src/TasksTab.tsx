@@ -88,6 +88,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
   const [quickStar, setQuickStar] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const [undo, setUndo] = useState<{ msg: string; prev: Task[] } | null>(null);
+  const [menuTask, setMenuTask] = useState<Task | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // edit popup
@@ -194,6 +195,18 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
     Share.share({ message: `המשימות שלי:\n${lines.join('\n')}` });
   };
 
+  const shareOne = (t: Task) => {
+    const subs = (t.subtasks ?? []).map((x) => `  ${x.done ? '☑' : '☐'} ${x.title}`);
+    const lines = [`${t.star ? '⭐ ' : ''}${t.title}${t.due ? ` (${displayYMD(t.due)})` : ''}`, ...subs];
+    Share.share({ message: lines.join('\n') });
+  };
+
+  const fromMenu = (fn: (t: Task) => void) => {
+    const t = menuTask;
+    setMenuTask(null);
+    if (t) fn(t);
+  };
+
   // ---------- edit ----------
   const openEdit = (t: Task) => {
     setEdit({ ...t, subtasks: [...(t.subtasks ?? [])] });
@@ -295,9 +308,9 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
     const area = t.areaId ? areas.find((a) => a.id === t.areaId) : undefined;
     return (
       <ReanimatedSwipeable
-        friction={2}
-        leftThreshold={70}
-        rightThreshold={70}
+        friction={1.2}
+        leftThreshold={40}
+        rightThreshold={40}
         renderLeftActions={() => (
           <View style={[styles.swipeAction, styles.swipeDone]}>
             <Text style={styles.swipeText}>{t.done ? '↩' : '✓'}</Text>
@@ -317,8 +330,8 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
         <TouchableOpacity
           style={[styles.taskRow, isActive && styles.listRowActive]}
           onPress={() => openEdit(t)}
-          onLongPress={t.done ? undefined : drag}
-          delayLongPress={250}
+          onLongPress={() => setMenuTask(t)}
+          delayLongPress={350}
         >
           <TouchableOpacity
             onPress={() => complete(t)}
@@ -346,6 +359,11 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
           <TouchableOpacity onPress={() => toggleStar(t)} hitSlop={10}>
             <Text style={[styles.starText, !t.star && styles.starOff]}>{t.star ? '⭐' : '☆'}</Text>
           </TouchableOpacity>
+          {!t.done ? (
+            <TouchableOpacity onLongPress={drag} delayLongPress={120} hitSlop={10} style={styles.dragHandle}>
+              <Text style={styles.dragHandleText}>☰</Text>
+            </TouchableOpacity>
+          ) : null}
         </TouchableOpacity>
       </ReanimatedSwipeable>
     );
@@ -403,7 +421,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
                 {chip('⭐ חשוב', quickStar, () => setQuickStar(!quickStar))}
               </View>
               <Text style={styles.hintText}>
-                החלק ימינה לסימון ✓, שמאלה למחיקה. החזק משימה וגרור כדי לסדר.
+                לחיצה ארוכה על משימה פותחת תפריט (מחיקה, שיתוף ועוד). אפשר גם להחליק: ימינה ✓, שמאלה 🗑️. לסידור, החזק את ☰ וגרור.
               </Text>
             </View>
             {rows.length === 0 ? <Text style={styles.emptyText}>אין משימות. כתוב משימה ולחץ "הוסף".</Text> : null}
@@ -419,6 +437,28 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
           </TouchableOpacity>
         </View>
       ) : null}
+
+      <PopupShell visible={!!menuTask} title={menuTask?.title ?? ''} onClose={() => setMenuTask(null)} yellow={false}>
+        {menuTask ? (
+          <>
+            {(
+              [
+                ['✏️  עריכה', () => fromMenu(openEdit)],
+                [menuTask.done ? '↩  החזר לפתוחות' : '✓  סמן כבוצעה', () => fromMenu(complete)],
+                [menuTask.star ? '☆  הסר סימון חשוב' : '⭐  סמן כחשובה', () => fromMenu(toggleStar)],
+                ['📤  שיתוף (וואטסאפ ועוד)', () => fromMenu(shareOne)],
+              ] as [string, () => void][]
+            ).map(([label, fn]) => (
+              <TouchableOpacity key={label} style={styles.menuItem} onPress={fn}>
+                <Text style={styles.menuItemText}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.menuItem} onPress={() => fromMenu(remove)}>
+              <Text style={[styles.menuItemText, styles.menuItemDanger]}>🗑️  מחיקה</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
+      </PopupShell>
 
       <PopupShell visible={!!edit} title="משימה" onClose={() => setEdit(null)} yellow={false}>
         {edit ? (

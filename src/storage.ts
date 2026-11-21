@@ -46,6 +46,8 @@ export interface AlarmArea {
   enabled: boolean;
   mode: AreaMode;
   note?: string;
+  /** Precise mode: the app follows the position itself (faster ring, more battery). */
+  precise?: boolean;
 }
 
 /** Runtime state written by the background task (kept separate from the areas list). */

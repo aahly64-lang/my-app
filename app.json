@@ -2,7 +2,7 @@
   "expo": {
     "name": "יומן ושולחן עבודה",
     "slug": "my-personal-board-apk",
-    "version": "1.4.1",
+    "version": "1.5.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -16,7 +16,7 @@
     },
     "android": {
       "package": "com.avi.personalboard",
-      "versionCode": 6,
+      "versionCode": 7,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F172A"
@@ -67,7 +67,7 @@
         "expo-location",
         {
           "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": false
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [

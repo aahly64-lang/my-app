@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Image, Linking, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, BackHandler, Image, Linking, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DraggableFlatList, { RenderItemParams, ScaleDecorator } from 'react-native-draggable-flatlist';
 import { useAppStyles } from './appStyles';
 import { useTheme } from './theme';
@@ -91,6 +91,81 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
 
   const group = groups.find((g) => g.id === groupId) ?? null;
   const sub = group?.subs.find((s) => s.id === subId) ?? null;
+
+  const goGroup = (id: string | null) => {
+    setGroupId(id);
+    setSubId(null);
+    setNewName('');
+  };
+
+  // The phone's back button goes up one level instead of leaving the app.
+  useEffect(() => {
+    const h = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (subId) {
+        setSubId(null);
+        return true;
+      }
+      if (groupId) {
+        goGroup(null);
+        return true;
+      }
+      return false;
+    });
+    return () => h.remove();
+  }, [groupId, subId]);
+
+  /** Group chips + clickable path, shown at the top of levels 2 and 3. */
+  const navBar = () => (
+    <View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.navChips} keyboardShouldPersistTaps="handled">
+        {groups.map((g) => (
+          <TouchableOpacity
+            key={g.id}
+            style={[styles.chip, styles.chipSpaced, g.id === groupId && styles.chipActive]}
+            onPress={() => goGroup(g.id)}
+          >
+            <Text style={[styles.chipText, g.id === groupId && styles.chipTextActive]}>{g.name}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+      <View style={styles.crumbRow}>
+        <TouchableOpacity onPress={() => goGroup(null)} hitSlop={6}>
+          <Text style={styles.crumbLink}>כל הקבוצות</Text>
+        </TouchableOpacity>
+        {group ? (
+          <>
+            <Text style={styles.crumbSep}> › </Text>
+            {sub ? (
+              <TouchableOpacity onPress={() => setSubId(null)} hitSlop={6}>
+                <Text style={styles.crumbLink}>{group.name}</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.crumbCurrent}>{group.name}</Text>
+            )}
+          </>
+        ) : null}
+        {sub ? (
+          <>
+            <Text style={styles.crumbSep}> › </Text>
+            <Text style={styles.crumbCurrent}>{sub.name}</Text>
+          </>
+        ) : null}
+      </View>
+      {group && sub && group.subs.length > 1 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.navChips} keyboardShouldPersistTaps="handled">
+          {group.subs.map((x) => (
+            <TouchableOpacity
+              key={x.id}
+              style={[styles.chip, styles.chipSpaced, styles.chipSmall, x.id === subId && styles.chipActive]}
+              onPress={() => setSubId(x.id)}
+            >
+              <Text style={[styles.chipText, x.id === subId && styles.chipTextActive]}>{x.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      ) : null}
+    </View>
+  );
 
   // A link shared from YouTube/Facebook fills the add form once a sub-group is open.
   useEffect(() => {
@@ -331,9 +406,7 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
             <View>
-              <TouchableOpacity onPress={() => setSubId(null)} style={styles.backBtn}>
-                <Text style={styles.backText}>› {group.name}</Text>
-              </TouchableOpacity>
+              {navBar()}
               <View style={styles.cardHeaderRow}>
                 <Text style={styles.sectionTitle}>
                   {group.name} · {sub.name}
@@ -393,15 +466,7 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
             <View>
-              <TouchableOpacity
-                onPress={() => {
-                  setGroupId(null);
-                  setNewName('');
-                }}
-                style={styles.backBtn}
-              >
-                <Text style={styles.backText}>› כל הקבוצות</Text>
-              </TouchableOpacity>
+              {navBar()}
               {sharedBanner}
               <View style={styles.cardHeaderRow}>
                 <Text style={styles.sectionTitle}>{group.name}</Text>
