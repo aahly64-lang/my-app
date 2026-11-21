@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   AppState,
@@ -9,12 +9,13 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useColorScheme,
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
-import { Palette, ThemeMode, useTheme } from './theme';
+import { Palette, cardShadow, themedStyles } from './theme';
 import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
 
 const SOUND_ROWS: [SoundKind, string][] = [
@@ -29,13 +30,6 @@ interface Props {
   onClose: () => void;
   onExport: () => void;
   onImport: () => void;
-  themeMode: ThemeMode;
-  onThemeMode: (m: ThemeMode) => void;
-}
-
-function useStyles() {
-  const c = useTheme();
-  return useMemo(() => makeStyles(c), [c]);
 }
 
 interface Status {
@@ -95,7 +89,6 @@ function Step({
   button: string;
   onPress: () => void;
 }) {
-  const styles = useStyles();
   return (
     <View style={[styles.step, ok && styles.stepOk]}>
       <View style={styles.stepHeader}>
@@ -115,8 +108,8 @@ function Step({
   );
 }
 
-export default function SetupScreen({ visible, onClose, onExport, onImport, themeMode, onThemeMode }: Props) {
-  const styles = useStyles();
+export default function SetupScreen({ visible, onClose, onExport, onImport }: Props) {
+  styles = themed.get(useColorScheme());
   const [status, setStatus] = useState<Status>(EMPTY);
   const [sounds, setSounds] = useState<SoundSettings>({});
 
@@ -192,30 +185,11 @@ export default function SetupScreen({ visible, onClose, onExport, onImport, them
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>הגדרות וגיבוי</Text>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+          <TouchableOpacity onPress={onClose} style={styles.closeBtn} accessibilityLabel="סגור">
             <Text style={styles.closeText}>✕</Text>
           </TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={styles.content}>
-          <Text style={styles.section}>מראה</Text>
-          <View style={styles.themeRow}>
-            {(
-              [
-                ['auto', '📱 אוטומטי'],
-                ['light', '☀️ בהיר'],
-                ['dark', '🌙 כהה'],
-              ] as [ThemeMode, string][]
-            ).map(([m, label]) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.themeBtn, themeMode === m && styles.themeBtnOn]}
-                onPress={() => onThemeMode(m)}
-              >
-                <Text style={[styles.themeBtnText, themeMode === m && styles.themeBtnTextOn]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
           <Text style={styles.section}>הרשאות לשעון המעורר לפי מיקום</Text>
           <Text style={styles.intro}>
             כדי שהשעון יצלצל גם כשהאפליקציה סגורה, צריך לאשר את כל השלבים. מספיק לעשות את זה פעם אחת.
@@ -308,81 +282,121 @@ export default function SetupScreen({ visible, onClose, onExport, onImport, them
   );
 }
 
-const makeStyles = (c: Palette) =>
-  StyleSheet.create({
+const themed = themedStyles((c: Palette) => ({
   safe: { flex: 1, backgroundColor: c.bg },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 14,
-    backgroundColor: c.card,
-    borderBottomWidth: 1,
-    borderBottomColor: c.border,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 12,
+    backgroundColor: c.bg,
   },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: c.text },
-  closeBtn: { padding: 6 },
-  closeText: { fontSize: 22, fontWeight: '800', color: c.text },
-  content: { padding: 14, paddingBottom: 48 },
-  section: { fontSize: 18, fontWeight: '800', color: c.text, marginTop: 8, marginBottom: 6 },
-  intro: { fontSize: 14, color: c.text2, marginBottom: 12, lineHeight: 20 },
+  headerTitle: { fontSize: 25, fontWeight: '800', color: c.text, letterSpacing: -0.3 },
+  closeBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: c.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  closeText: { fontSize: 16, fontWeight: '700', color: c.text },
+  content: { padding: 16, paddingBottom: 56 },
+  section: { fontSize: 19, fontWeight: '700', color: c.text, marginTop: 12, marginBottom: 6 },
+  intro: { fontSize: 14, color: c.muted, marginBottom: 12, lineHeight: 21 },
   allOk: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: c.okText,
-    backgroundColor: c.okBg,
-    padding: 10,
-    borderRadius: 8,
+    fontSize: 14.5,
+    fontWeight: '700',
+    color: c.onSuccessSoft,
+    backgroundColor: c.successSoft,
+    padding: 12,
+    borderRadius: 14,
+    overflow: 'hidden',
     marginBottom: 12,
   },
-  step: { backgroundColor: c.card, borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2 },
-  stepOk: { backgroundColor: c.okBg },
-  stepHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  step: {
+    backgroundColor: c.surface,
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.line,
+    ...cardShadow(c),
+  },
+  stepOk: { backgroundColor: c.surface, opacity: 0.85 },
+  stepHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
   stepNum: {
     width: 28,
     height: 28,
     borderRadius: 14,
+    overflow: 'hidden',
     backgroundColor: c.accent,
-    color: '#FFFFFF',
+    color: c.onAccent,
     textAlign: 'center',
     textAlignVertical: 'center',
-    fontWeight: '800',
+    fontWeight: '700',
+    fontSize: 14,
   },
-  stepTitle: { flex: 1, fontSize: 16, fontWeight: '800', color: c.text },
-  badge: { fontSize: 12, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, overflow: 'hidden' },
-  badgeOk: { backgroundColor: '#BBF7D0', color: '#166534' },
-  badgeTodo: { backgroundColor: '#FEE2E2', color: '#991B1B' },
-  badgeManual: { backgroundColor: '#FEF3C7', color: '#92400E' },
-  stepText: { fontSize: 14, color: c.text2, lineHeight: 20 },
-  stepBtn: { marginTop: 10, backgroundColor: c.accent, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
-  stepBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
-  testBtn: { backgroundColor: '#DC2626', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginVertical: 14 },
-  testBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
+  stepTitle: { flex: 1, fontSize: 15.5, fontWeight: '700', color: c.text },
+  badge: {
+    fontSize: 12,
+    fontWeight: '600',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  badgeOk: { backgroundColor: c.successSoft, color: c.onSuccessSoft },
+  badgeTodo: { backgroundColor: c.dangerSoft, color: c.onDangerSoft },
+  badgeManual: { backgroundColor: c.warnSoft, color: c.onWarnSoft },
+  stepText: { fontSize: 14, color: c.text2, lineHeight: 21 },
+  stepBtn: {
+    marginTop: 12,
+    backgroundColor: c.accent,
+    minHeight: 44,
+    paddingVertical: 11,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepBtnText: { color: c.onAccent, fontWeight: '700', fontSize: 14.5 },
+  testBtn: {
+    backgroundColor: c.primary,
+    minHeight: 50,
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 14,
+  },
+  testBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 16 },
   soundRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: c.card,
-    borderRadius: 10,
-    padding: 12,
+    backgroundColor: c.surface,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.line,
+    padding: 14,
     marginBottom: 8,
     gap: 8,
   },
-  soundName: { maxWidth: '55%', fontSize: 13, color: c.link, fontWeight: '700' },
-  backupBtn: { backgroundColor: '#0284C7', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
-  backupBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
-  restoreBtn: { backgroundColor: c.card, borderWidth: 2, borderColor: c.link },
-  restoreText: { color: c.link },
-  themeRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  themeBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.card,
+  soundName: { maxWidth: '55%', fontSize: 13, color: c.accentText, fontWeight: '600' },
+  backupBtn: {
+    backgroundColor: c.accent,
+    minHeight: 50,
+    paddingVertical: 14,
+    borderRadius: 16,
     alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
   },
-  themeBtnOn: { backgroundColor: c.accent, borderColor: c.accent },
-  themeBtnText: { fontWeight: '800', color: c.text },
-  themeBtnTextOn: { color: '#FFFFFF' },
-});
+  backupBtnText: { color: c.onAccent, fontWeight: '700', fontSize: 15 },
+  restoreBtn: { backgroundColor: c.surface, borderWidth: 1.5, borderColor: c.line },
+  restoreText: { color: c.text },
+}));
+let styles = themed.light;
