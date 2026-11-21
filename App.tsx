@@ -3,10 +3,8 @@ import {
   Alert,
   AppState,
   Image,
-  KeyboardAvoidingView,
   Linking,
   Modal,
-  Platform,
   SafeAreaView,
   ScrollView,
   Share,
@@ -27,7 +25,19 @@ import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import { syncGeofences, MIN_RADIUS_M } from './src/geoTask';
 import { exportBackup, pickBackup } from './src/backup';
 import {
+  TIMER_RING_ID,
+  alarmRingId,
+  cancelRing,
+  nextAlarmTime,
+  noteRingId,
+  scheduleAlarmClock,
+  scheduleSimpleRing,
+  scheduledRingIds,
+  untilText,
+} from './src/rings';
+import {
   AlarmArea,
+  AlarmClock,
   AreaMode,
   DEFAULT_CATEGORIES,
   MuscleCategory,
@@ -36,12 +46,14 @@ import {
   WELCOME_NOTE,
   WorkoutLink,
   formatHebrewDate,
+  loadAlarmClocks,
   loadAreas,
   loadBoard,
   loadTimer,
   localDateString,
   markSetupSeen,
   newId,
+  saveAlarmClocks,
   saveAreas,
   saveBoard,
   saveTimer,
@@ -131,36 +143,72 @@ function formatRadius(r: number): string {
   return r >= 1000 ? `${Math.round(r / 10) / 100} ק"מ` : `${r} מ'`;
 }
 
-async function scheduleNoteNotification(
+type ReminderMode = 'ring' | 'silent';
+
+/**
+ * (Re)schedules the reminder of a note. Cancels any previous ring/notification first.
+ * Returns { ok, notificationId } – ok=false means the user must fix the date/time.
+ */
+async function scheduleNoteReminder(
+  noteId: string,
   title: string,
   body: string,
   enabled: boolean,
+  mode: ReminderMode,
   dateStr?: string,
   timeStr?: string,
   previousNotificationId?: string | null,
   silent = false
-): Promise<string | null> {
+): Promise<{ ok: boolean; notificationId: string | null }> {
+  cancelRing(noteRingId(noteId));
   if (previousNotificationId) {
     await Notifications.cancelScheduledNotificationAsync(previousNotificationId).catch(() => {});
   }
-  if (!enabled) return null;
+  if (!enabled) return { ok: true, notificationId: null };
   const target = parseDateTimeToDate(dateStr, timeStr);
   if (!target) {
     if (!silent) Alert.alert('תזמון לא תקין', 'בחר תאריך ושעה.');
-    return null;
+    return { ok: false, notificationId: null };
   }
   if (target.getTime() <= Date.now()) {
     if (!silent) Alert.alert('הזמן כבר עבר', 'בחר תאריך ושעה עתידיים כדי לתזמן תזכורת.');
-    return null;
+    return { ok: false, notificationId: null };
+  }
+  if (mode === 'ring') {
+    await scheduleSimpleRing(noteRingId(noteId), 'reminder', target.getTime(), title || 'תזכורת', body || 'הגיע הזמן לבצע את המטלה.');
+    return { ok: true, notificationId: null };
   }
   try {
-    return await Notifications.scheduleNotificationAsync({
+    const id = await Notifications.scheduleNotificationAsync({
       content: { title: `תזכורת: ${title || 'מטלה'}`, body: body || 'הגיע הזמן לבצע את המטלה.', sound: true },
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: target },
     });
+    return { ok: true, notificationId: id };
   } catch {
-    return null;
+    return { ok: false, notificationId: null };
   }
+}
+
+async function cancelNoteReminder(note: StickyNote) {
+  cancelRing(noteRingId(note.id));
+  if (note.notificationId) {
+    await Notifications.cancelScheduledNotificationAsync(note.notificationId).catch(() => {});
+  }
+}
+
+const DAY_LETTERS = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+
+function daysSummary(days: number[]): string {
+  if (days.length === 0) return 'פעם אחת';
+  if (days.length === 7) return 'כל יום';
+  const sorted = [...days].sort();
+  if (sorted.join() === '0,1,2,3,4') return 'א׳–ה׳';
+  if (sorted.join() === '0,1,2,3,4,5') return 'א׳–ו׳';
+  return sorted.map((d) => DAY_LETTERS[d] + '׳').join(' ');
+}
+
+function hhmm(h: number, m: number) {
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
 // ---------- small UI pieces ----------
@@ -174,8 +222,10 @@ function ScheduleEditor(props: {
   setDate: (v: string) => void;
   time: string;
   setTime: (v: string) => void;
+  mode: ReminderMode;
+  setMode: (v: ReminderMode) => void;
 }) {
-  const { open, setOpen, enabled, setEnabled, date, setDate, time, setTime } = props;
+  const { open, setOpen, enabled, setEnabled, date, setDate, time, setTime, mode, setMode } = props;
   return (
     <>
       <TouchableOpacity style={styles.advancedToggle} onPress={() => setOpen(!open)}>
@@ -190,14 +240,32 @@ function ScheduleEditor(props: {
             <Switch value={enabled} onValueChange={setEnabled} />
           </View>
           {enabled && (
-            <View style={styles.row}>
-              <TouchableOpacity style={[styles.pickerBtn, styles.flex1]} onPress={() => pickDate(date, setDate)}>
-                <Text style={styles.pickerBtnText}>📅 {displayDate(date)}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.pickerBtn, styles.flex1]} onPress={() => pickTime(date, time, setTime)}>
-                <Text style={styles.pickerBtnText}>🕘 {time}</Text>
-              </TouchableOpacity>
-            </View>
+            <>
+              <View style={styles.row}>
+                <TouchableOpacity style={[styles.pickerBtn, styles.flex1]} onPress={() => pickDate(date, setDate)}>
+                  <Text style={styles.pickerBtnText}>📅 {displayDate(date)}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.pickerBtn, styles.flex1]} onPress={() => pickTime(date, time, setTime)}>
+                  <Text style={styles.pickerBtnText}>🕘 {time}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.row}>
+                {(
+                  [
+                    ['ring', '🔔 צלצול'],
+                    ['silent', '🔕 התראה שקטה'],
+                  ] as [ReminderMode, string][]
+                ).map(([m, label]) => (
+                  <TouchableOpacity
+                    key={m}
+                    style={[styles.segment, mode === m && styles.segmentOn]}
+                    onPress={() => setMode(m)}
+                  >
+                    <Text style={[styles.segmentText, mode === m && styles.segmentTextOn]}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </>
           )}
         </View>
       )}
@@ -220,10 +288,7 @@ function PopupShell({
 }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        style={styles.backdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
+      <View style={styles.backdrop}>
         <View style={[styles.popup, yellow ? styles.popupYellow : styles.popupWhite]}>
           <View style={styles.popupHeader}>
             <Text style={styles.popupTitle}>{title}</Text>
@@ -233,7 +298,7 @@ function PopupShell({
           </View>
           <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -255,6 +320,7 @@ export default function App() {
   const [newSchedEnabled, setNewSchedEnabled] = useState(false);
   const [newSchedDate, setNewSchedDate] = useState(localDateString());
   const [newSchedTime, setNewSchedTime] = useState('09:00');
+  const [newMode, setNewMode] = useState<ReminderMode>('ring');
 
   const [selectedNote, setSelectedNote] = useState<StickyNote | null>(null);
   const [editTitle, setEditTitle] = useState('');
@@ -263,6 +329,12 @@ export default function App() {
   const [editSchedEnabled, setEditSchedEnabled] = useState(false);
   const [editSchedDate, setEditSchedDate] = useState(localDateString());
   const [editSchedTime, setEditSchedTime] = useState('09:00');
+  const [editMode, setEditMode] = useState<ReminderMode>('ring');
+
+  // --- alarm clocks ---
+  const [alarms, setAlarms] = useState<AlarmClock[]>([]);
+  const [alarmForm, setAlarmForm] = useState<AlarmClock | null>(null);
+  const [alarmFormIsNew, setAlarmFormIsNew] = useState(false);
 
   // --- workouts ---
   const [categories, setCategories] = useState<MuscleCategory[]>(DEFAULT_CATEGORIES);
@@ -304,6 +376,21 @@ export default function App() {
 
   // ---------- load & persist ----------
 
+  const reconcileAlarms = useCallback(async (list: AlarmClock[]) => {
+    // One-time alarms that already rang are switched off.
+    const ids = scheduledRingIds();
+    let changed = false;
+    const next = list.map((a) => {
+      if (a.enabled && a.days.length === 0 && !ids.has(alarmRingId(a.id)) && !ids.has(`${alarmRingId(a.id)}:snooze`)) {
+        changed = true;
+        return { ...a, enabled: false };
+      }
+      return a;
+    });
+    if (changed) await saveAlarmClocks(next);
+    return next;
+  }, []);
+
   const refreshPermissions = useCallback(async () => {
     setPermissionsOk(await allAlarmPermissionsOk());
   }, []);
@@ -336,6 +423,10 @@ export default function App() {
       }
       setAreas(storedAreas);
 
+      const storedAlarms = await reconcileAlarms(await loadAlarmClocks());
+      setAlarms(storedAlarms);
+      for (const a of storedAlarms) if (a.enabled) await scheduleAlarmClock(a);
+
       const t = await loadTimer();
       if (t) {
         if (t.endAt && t.endAt <= Date.now()) {
@@ -355,7 +446,7 @@ export default function App() {
       }
       refreshPermissions();
     })();
-  }, [refreshPermissions]);
+  }, [refreshPermissions, reconcileAlarms]);
 
   useEffect(() => {
     if (loaded) saveBoard({ notes, categories });
@@ -370,11 +461,12 @@ export default function App() {
     const sub = AppState.addEventListener('change', async (s) => {
       if (s === 'active') {
         setAreas(await loadAreas());
+        setAlarms(await reconcileAlarms(await loadAlarmClocks()));
         refreshPermissions();
       }
     });
     return () => sub.remove();
-  }, [refreshPermissions]);
+  }, [refreshPermissions, reconcileAlarms]);
 
   // ---------- shared links from YouTube / Facebook ----------
 
@@ -409,6 +501,7 @@ export default function App() {
     setNewSchedEnabled(false);
     setNewSchedDate(localDateString());
     setNewSchedTime('09:00');
+    setNewMode('ring');
     setCreateVisible(true);
   };
 
@@ -418,19 +511,21 @@ export default function App() {
       return;
     }
     const wantsSchedule = newAdvOpen && newSchedEnabled;
-    const notifId = await scheduleNoteNotification(
-      newTitle.trim(), newBody.trim(), wantsSchedule, newSchedDate, newSchedTime, null
+    const id = newId();
+    const r = await scheduleNoteReminder(
+      id, newTitle.trim(), newBody.trim(), wantsSchedule, newMode, newSchedDate, newSchedTime, null
     );
-    if (wantsSchedule && !notifId) return;
+    if (!r.ok) return;
     const item: StickyNote = {
-      id: newId(),
+      id,
       title: newTitle.trim() || 'פתק צהוב',
       body: newBody.trim(),
       updatedAt: new Date().toISOString(),
-      scheduleEnabled: Boolean(notifId),
-      scheduleDate: notifId ? newSchedDate : undefined,
-      scheduleTime: notifId ? newSchedTime : undefined,
-      notificationId: notifId,
+      scheduleEnabled: wantsSchedule,
+      reminderMode: newMode,
+      scheduleDate: wantsSchedule ? newSchedDate : undefined,
+      scheduleTime: wantsSchedule ? newSchedTime : undefined,
+      notificationId: r.notificationId,
     };
     setNotes((prev) => [item, ...prev]);
     setCreateVisible(false);
@@ -444,24 +539,23 @@ export default function App() {
     setEditSchedEnabled(Boolean(note.scheduleEnabled));
     setEditSchedDate(note.scheduleDate || localDateString());
     setEditSchedTime(note.scheduleTime || '09:00');
+    setEditMode(note.reminderMode ?? 'ring');
   };
 
   const saveNote = async () => {
     if (!selectedNote) return;
     const wantsSchedule = editAdvOpen && editSchedEnabled;
-    const unchangedSchedule =
-      wantsSchedule &&
-      selectedNote.scheduleEnabled &&
-      selectedNote.notificationId &&
-      selectedNote.scheduleDate === editSchedDate &&
-      selectedNote.scheduleTime === editSchedTime;
-    let notifId: string | null | undefined = selectedNote.notificationId;
-    if (!unchangedSchedule) {
-      notifId = await scheduleNoteNotification(
-        editTitle.trim(), editBody.trim(), wantsSchedule, editSchedDate, editSchedTime, selectedNote.notificationId
-      );
-      if (wantsSchedule && !notifId) return;
-    }
+    const r = await scheduleNoteReminder(
+      selectedNote.id,
+      editTitle.trim(),
+      editBody.trim(),
+      wantsSchedule,
+      editMode,
+      editSchedDate,
+      editSchedTime,
+      selectedNote.notificationId
+    );
+    if (!r.ok) return;
     setNotes((prev) =>
       prev.map((n) =>
         n.id === selectedNote.id
@@ -470,10 +564,11 @@ export default function App() {
               title: editTitle.trim() || 'פתק צהוב',
               body: editBody.trim(),
               updatedAt: new Date().toISOString(),
-              scheduleEnabled: Boolean(notifId),
-              scheduleDate: notifId ? editSchedDate : undefined,
-              scheduleTime: notifId ? editSchedTime : undefined,
-              notificationId: notifId ?? null,
+              scheduleEnabled: wantsSchedule,
+              reminderMode: editMode,
+              scheduleDate: wantsSchedule ? editSchedDate : undefined,
+              scheduleTime: wantsSchedule ? editSchedTime : undefined,
+              notificationId: r.notificationId,
             }
           : n
       )
@@ -483,16 +578,14 @@ export default function App() {
 
   const toggleDone = async (note: StickyNote) => {
     const done = !note.done;
-    if (done && note.notificationId) {
-      await Notifications.cancelScheduledNotificationAsync(note.notificationId).catch(() => {});
-    }
+    if (done) await cancelNoteReminder(note);
     setNotes((prev) =>
       prev.map((n) =>
         n.id === note.id
           ? {
               ...n,
               done,
-              ...(done && n.notificationId
+              ...(done
                 ? { notificationId: null, scheduleEnabled: false, scheduleDate: undefined, scheduleTime: undefined }
                 : {}),
             }
@@ -503,9 +596,7 @@ export default function App() {
 
   const deleteNote = (note: StickyNote) => {
     confirm('מחיקת פתק', `למחוק את "${note.title}"?`, 'מחק', async () => {
-      if (note.notificationId) {
-        await Notifications.cancelScheduledNotificationAsync(note.notificationId).catch(() => {});
-      }
+      await cancelNoteReminder(note);
       setNotes((prev) => prev.filter((n) => n.id !== note.id));
       setSelectedNote(null);
     });
@@ -643,40 +734,89 @@ export default function App() {
   const startTimer = async () => {
     const secs = timer.pausedRemainingSec ?? timer.durationSec;
     if (secs <= 0) return;
-    let notificationId: string | null = null;
-    try {
-      notificationId = await Notifications.scheduleNotificationAsync({
-        content: { title: 'הטיימר הסתיים', body: 'זמן הספירה לאחור הגיע לאפס.', sound: true },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: secs },
-      });
-    } catch {
-      // ignore
-    }
+    const endAt = Date.now() + secs * 1000;
+    await scheduleSimpleRing(TIMER_RING_ID, 'timer', endAt, 'הטיימר הסתיים', 'זמן הספירה לאחור הגיע לאפס');
     setNow(Date.now());
-    setTimer((t) => ({ ...t, endAt: Date.now() + secs * 1000, pausedRemainingSec: null, notificationId }));
+    setTimer((t) => ({ ...t, endAt, pausedRemainingSec: null, notificationId: null }));
   };
 
-  const pauseTimer = async () => {
-    if (timer.notificationId) {
-      await Notifications.cancelScheduledNotificationAsync(timer.notificationId).catch(() => {});
-    }
+  const pauseTimer = () => {
+    cancelRing(TIMER_RING_ID);
     setTimer((t) => ({ ...t, endAt: null, pausedRemainingSec: remainingSec, notificationId: null }));
   };
 
-  const resetTimer = async () => {
-    if (timer.notificationId) {
-      await Notifications.cancelScheduledNotificationAsync(timer.notificationId).catch(() => {});
-    }
+  const resetTimer = () => {
+    cancelRing(TIMER_RING_ID);
     setTimer((t) => ({ ...t, endAt: null, pausedRemainingSec: null, notificationId: null }));
   };
 
-  const applyTimer = async () => {
+  const applyTimer = () => {
     const m = Math.max(0, parseInt(timerMinutes || '0', 10) || 0);
     const s = Math.max(0, Math.min(59, parseInt(timerSeconds || '0', 10) || 0));
-    if (timer.notificationId) {
-      await Notifications.cancelScheduledNotificationAsync(timer.notificationId).catch(() => {});
-    }
+    cancelRing(TIMER_RING_ID);
     setTimer({ durationSec: m * 60 + s, endAt: null, pausedRemainingSec: null, notificationId: null });
+  };
+
+  // ---------- alarm clocks ----------
+
+  const persistAlarms = async (next: AlarmClock[]) => {
+    setAlarms(next);
+    await saveAlarmClocks(next);
+  };
+
+  const openNewAlarm = () => {
+    const d = new Date(Date.now() + 60 * 60 * 1000);
+    setAlarmForm({
+      id: newId(),
+      label: '',
+      hour: d.getHours(),
+      minute: 0,
+      days: [],
+      enabled: true,
+      snoozeEnabled: true,
+      snoozeMin: 10,
+      snoozeCount: 3,
+    });
+    setAlarmFormIsNew(true);
+  };
+
+  const saveAlarmForm = async () => {
+    if (!alarmForm) return;
+    const a = { ...alarmForm, enabled: true };
+    const next = alarmFormIsNew ? [...alarms, a] : alarms.map((x) => (x.id === a.id ? a : x));
+    next.sort((x, y) => x.hour * 60 + x.minute - (y.hour * 60 + y.minute));
+    await scheduleAlarmClock(a);
+    await persistAlarms(next);
+    setAlarmForm(null);
+    Alert.alert('השעון נקבע', `השעון יצלצל ${untilText(nextAlarmTime(a.hour, a.minute, a.days))}.`);
+  };
+
+  const toggleAlarm = async (a: AlarmClock) => {
+    const updated = { ...a, enabled: !a.enabled };
+    await scheduleAlarmClock(updated);
+    await persistAlarms(alarms.map((x) => (x.id === a.id ? updated : x)));
+  };
+
+  const deleteAlarm = (a: AlarmClock) => {
+    confirm('מחיקת שעון', `למחוק את השעון ${hhmm(a.hour, a.minute)}?`, 'מחק', async () => {
+      cancelRing(alarmRingId(a.id));
+      await persistAlarms(alarms.filter((x) => x.id !== a.id));
+      setAlarmForm(null);
+    });
+  };
+
+  const pickAlarmTime = () => {
+    if (!alarmForm) return;
+    const base = new Date();
+    base.setHours(alarmForm.hour, alarmForm.minute, 0, 0);
+    DateTimePickerAndroid.open({
+      value: base,
+      mode: 'time',
+      is24Hour: true,
+      onChange: (e, d) => {
+        if (e.type === 'set' && d) setAlarmForm((f) => (f ? { ...f, hour: d.getHours(), minute: d.getMinutes() } : f));
+      },
+    });
   };
 
   const formattedTime = `${String(Math.floor(remainingSec / 60)).padStart(2, '0')}:${String(
@@ -815,7 +955,7 @@ export default function App() {
 
   const doExport = async () => {
     try {
-      await exportBackup({ notes, categories, areas: await loadAreas() });
+      await exportBackup({ notes, categories, areas: await loadAreas(), alarms });
     } catch {
       Alert.alert('הגיבוי נכשל', 'לא הצלחתי ליצור את קובץ הגיבוי.');
     }
@@ -826,29 +966,37 @@ export default function App() {
     if (!data) return;
     confirm(
       'שחזור מגיבוי',
-      `הגיבוי כולל ${data.notes.length} פתקים, ${data.categories.length} קבוצות שרירים ו-${data.areas.length} אזורים.\nהשחזור יחליף את כל המידע הנוכחי באפליקציה.`,
+      `הגיבוי כולל ${data.notes.length} פתקים, ${data.categories.length} קבוצות שרירים, ${data.alarms.length} שעונים מעוררים ו-${data.areas.length} אזורים.\nהשחזור יחליף את כל המידע הנוכחי באפליקציה.`,
       'שחזר',
       async () => {
         await Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
+        for (const n of notes) cancelRing(noteRingId(n.id));
+        for (const a of alarms) cancelRing(alarmRingId(a.id));
         const restoredNotes: StickyNote[] = [];
         for (const n of data.notes) {
+          let ok = false;
           let notificationId: string | null = null;
           if (n.scheduleEnabled && !n.done) {
-            notificationId = await scheduleNoteNotification(
-              n.title, n.body, true, n.scheduleDate, n.scheduleTime, null, true
+            const r = await scheduleNoteReminder(
+              n.id, n.title, n.body, true, n.reminderMode ?? 'ring', n.scheduleDate, n.scheduleTime, null, true
             );
+            ok = r.ok;
+            notificationId = r.notificationId;
           }
           restoredNotes.push({
             ...n,
             notificationId,
-            scheduleEnabled: Boolean(notificationId),
-            scheduleDate: notificationId ? n.scheduleDate : undefined,
-            scheduleTime: notificationId ? n.scheduleTime : undefined,
+            scheduleEnabled: ok,
+            scheduleDate: ok ? n.scheduleDate : undefined,
+            scheduleTime: ok ? n.scheduleTime : undefined,
           });
         }
+        for (const a of data.alarms) await scheduleAlarmClock(a);
+        await persistAlarms(data.alarms);
         setNotes(restoredNotes);
         setCategories(data.categories);
         setSelectedCategoryId(data.categories[0]?.id ?? '');
+        cancelRing(TIMER_RING_ID);
         setTimer((t) => ({ ...t, endAt: null, pausedRemainingSec: null, notificationId: null }));
         await persistAreas(data.areas, data.areas.map((a) => a.id));
         setSetupVisible(false);
@@ -928,7 +1076,7 @@ export default function App() {
                   </Text>
                   {note.scheduleEnabled && note.scheduleDate && note.scheduleTime ? (
                     <Text style={styles.scheduleTag}>
-                      ⏰ {displayDate(note.scheduleDate)} {note.scheduleTime}
+                      {note.reminderMode === 'silent' ? '🔕' : '🔔'} {displayDate(note.scheduleDate)} {note.scheduleTime}
                     </Text>
                   ) : null}
                   <Text style={styles.noteDate}>
@@ -1058,6 +1206,37 @@ export default function App() {
         {activeTab === 'alarms' && (
           <View>
             <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <Text style={styles.subTitle}>⏰ שעון מעורר</Text>
+                <TouchableOpacity style={styles.smallDarkBtn} onPress={openNewAlarm}>
+                  <Text style={styles.whiteBtnText}>+ הוסף</Text>
+                </TouchableOpacity>
+              </View>
+              {alarms.length === 0 ? <Text style={styles.emptyText}>עדיין אין שעונים מעוררים.</Text> : null}
+              {alarms.map((a) => (
+                <View key={a.id} style={styles.alarmItem}>
+                  <TouchableOpacity
+                    style={styles.flex1}
+                    onPress={() => {
+                      setAlarmForm(a);
+                      setAlarmFormIsNew(false);
+                    }}
+                  >
+                    <Text style={[styles.alarmTime, !a.enabled && styles.mutedText]}>{hhmm(a.hour, a.minute)}</Text>
+                    <Text style={styles.itemSub}>
+                      {a.label ? `${a.label} · ` : ''}
+                      {daysSummary(a.days)}
+                      {a.snoozeEnabled
+                        ? ` · נודניק ${a.snoozeMin} דק' ${a.snoozeCount < 0 ? '(ללא הגבלה)' : `×${a.snoozeCount}`}`
+                        : ' · בלי נודניק'}
+                    </Text>
+                  </TouchableOpacity>
+                  <Switch value={a.enabled} onValueChange={() => toggleAlarm(a)} />
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.card}>
               <Text style={styles.subTitle}>📍 שעון מעורר לפי מיקום</Text>
               <Text style={styles.itemSub}>
                 בחר אזור על המפה, והטלפון יצלצל כשתיכנס אליו, גם כשהאפליקציה סגורה.
@@ -1132,7 +1311,7 @@ export default function App() {
                   <Text style={styles.grayBtnText}>איפוס</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.hintText}>ההתראה תגיע בזמן גם אם תסגור את האפליקציה.</Text>
+              <Text style={styles.hintText}>בסיום הטיימר יצלצל צלצול מלא, גם אם האפליקציה סגורה.</Text>
             </View>
           </View>
         )}
@@ -1157,6 +1336,8 @@ export default function App() {
           setDate={setNewSchedDate}
           time={newSchedTime}
           setTime={setNewSchedTime}
+          mode={newMode}
+          setMode={setNewMode}
         />
         <TouchableOpacity style={styles.darkBtn} onPress={createNote}>
           <Text style={styles.whiteBtnText}>הדבק לשולחן העבודה</Text>
@@ -1182,6 +1363,8 @@ export default function App() {
           setDate={setEditSchedDate}
           time={editSchedTime}
           setTime={setEditSchedTime}
+          mode={editMode}
+          setMode={setEditMode}
         />
         {selectedNote ? (
           <TouchableOpacity
@@ -1308,6 +1491,107 @@ export default function App() {
                     if (a) deleteArea(a);
                   }}
                 >
+                  <Text style={styles.whiteBtnText}>מחק</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </>
+        ) : null}
+      </PopupShell>
+
+      {/* ---------- popup: alarm clock ---------- */}
+      <PopupShell
+        visible={!!alarmForm}
+        title={alarmFormIsNew ? 'שעון מעורר חדש' : 'עריכת שעון מעורר'}
+        onClose={() => setAlarmForm(null)}
+        yellow={false}
+      >
+        {alarmForm ? (
+          <>
+            <TouchableOpacity style={styles.bigTimeBtn} onPress={pickAlarmTime}>
+              <Text style={styles.bigTimeText}>{hhmm(alarmForm.hour, alarmForm.minute)}</Text>
+              <Text style={styles.itemSub}>לחץ לשינוי השעה</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.label}>ימים (בלי בחירה = פעם אחת)</Text>
+            <View style={styles.daysRow}>
+              {DAY_LETTERS.map((letter, d) => {
+                const on = alarmForm.days.includes(d);
+                return (
+                  <TouchableOpacity
+                    key={d}
+                    style={[styles.dayChip, on && styles.dayChipOn]}
+                    onPress={() =>
+                      setAlarmForm({
+                        ...alarmForm,
+                        days: on ? alarmForm.days.filter((x) => x !== d) : [...alarmForm.days, d].sort(),
+                      })
+                    }
+                  >
+                    <Text style={[styles.dayChipText, on && styles.dayChipTextOn]}>{letter}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={styles.label}>שם (לא חובה)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder='למשל "עבודה"'
+              value={alarmForm.label}
+              onChangeText={(t) => setAlarmForm({ ...alarmForm, label: t })}
+            />
+
+            <View style={styles.switchRowPlain}>
+              <Text style={styles.label}>נודניק</Text>
+              <Switch
+                value={alarmForm.snoozeEnabled}
+                onValueChange={(v) => setAlarmForm({ ...alarmForm, snoozeEnabled: v })}
+              />
+            </View>
+            {alarmForm.snoozeEnabled ? (
+              <>
+                <Text style={styles.hintText}>כמה זמן כל נודניק:</Text>
+                <View style={styles.chipsWrapRow}>
+                  {[5, 10, 15, 20].map((m) => (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.chip, styles.chipSpaced, alarmForm.snoozeMin === m && styles.chipActive]}
+                      onPress={() => setAlarmForm({ ...alarmForm, snoozeMin: m })}
+                    >
+                      <Text style={[styles.chipText, alarmForm.snoozeMin === m && styles.chipTextActive]}>{m} דק'</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.hintText}>כמה פעמים:</Text>
+                <View style={styles.chipsWrapRow}>
+                  {[1, 2, 3, 5, -1].map((c) => (
+                    <TouchableOpacity
+                      key={c}
+                      style={[styles.chip, styles.chipSpaced, alarmForm.snoozeCount === c && styles.chipActive]}
+                      onPress={() => setAlarmForm({ ...alarmForm, snoozeCount: c })}
+                    >
+                      <Text style={[styles.chipText, alarmForm.snoozeCount === c && styles.chipTextActive]}>
+                        {c < 0 ? 'בלי הגבלה' : `${c}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.hintText}>
+                  {alarmForm.snoozeCount < 0
+                    ? 'הנודניק יחזור עד שתלחץ "עצור".'
+                    : `אחרי ${alarmForm.snoozeCount} נודניקים השעון מפסיק ולא חוזר.`}
+                </Text>
+              </>
+            ) : null}
+            <Text style={styles.hintText}>אם לא לוחצים כלום, השעון נעצר אחרי 10 דקות.</Text>
+
+            <View style={styles.actionRow}>
+              <TouchableOpacity style={styles.greenBtn} onPress={saveAlarmForm}>
+                <Text style={styles.whiteBtnText}>שמור</Text>
+              </TouchableOpacity>
+              {!alarmFormIsNew ? (
+                <TouchableOpacity style={styles.redBtn} onPress={() => deleteAlarm(alarmForm)}>
                   <Text style={styles.whiteBtnText}>מחק</Text>
                 </TouchableOpacity>
               ) : null}
@@ -1503,8 +1787,14 @@ const styles = StyleSheet.create({
   segmentText: { fontWeight: '700', color: '#334155' },
   segmentTextOn: { color: '#FFFFFF' },
   timerText: { fontSize: 46, fontWeight: '800', textAlign: 'center', color: '#0F172A', marginVertical: 8 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.55)', justifyContent: 'center', padding: 16 },
-  popup: { borderRadius: 12, padding: 16, elevation: 8, maxHeight: '90%' },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 16,
+    paddingTop: 48,
+  },
+  popup: { borderRadius: 12, padding: 16, elevation: 8, maxHeight: '88%' },
   popupYellow: { backgroundColor: '#FEF9C3' },
   popupWhite: { backgroundColor: '#FFFFFF' },
   popupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
@@ -1539,4 +1829,32 @@ const styles = StyleSheet.create({
   doneBtnOn: { backgroundColor: '#E7E5E4' },
   doneBtnText: { color: '#166534', fontWeight: '800', fontSize: 14 },
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  smallDarkBtn: { backgroundColor: '#0F172A', paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8 },
+  alarmItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    gap: 8,
+  },
+  alarmTime: { fontSize: 30, fontWeight: '800', color: '#0F172A' },
+  bigTimeBtn: { alignItems: 'center', paddingVertical: 10, backgroundColor: '#F1F5F9', borderRadius: 12, marginBottom: 10 },
+  bigTimeText: { fontSize: 52, fontWeight: '800', color: '#0F172A' },
+  daysRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
+  dayChip: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  dayChipOn: { backgroundColor: '#0F172A', borderColor: '#0F172A' },
+  dayChipText: { fontWeight: '800', color: '#334155' },
+  dayChipTextOn: { color: '#FFFFFF' },
+  switchRowPlain: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
 });

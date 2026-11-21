@@ -2,8 +2,30 @@ import { requireOptionalNativeModule } from 'expo';
 
 type SharedTextEvent = { text: string };
 
+export type RingKind = 'alarm' | 'timer' | 'reminder' | 'geo';
+
+export interface RingSpec {
+  id: string;
+  at: number;
+  title: string;
+  body: string;
+  kind: RingKind;
+  sound: string;
+  durationMs: number;
+  snoozeMin: number; // 0 = no snooze
+  snoozeLeft: number; // -1 = unlimited
+  daysMask: number; // bit0 = Sunday ... bit6 = Saturday; 0 = one-time
+  hour: number;
+  minute: number;
+}
+
 type GeoAlarmNative = {
-  triggerAlarm(title: string, body: string): void;
+  triggerAlarm(title: string, body: string, kind: string, sound: string | null, durationMs: number): void;
+  scheduleRing(json: string): void;
+  cancelRing(id: string): void;
+  getScheduledRingIds(): string[];
+  getSoundTitle(uri: string | null): string;
+  pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
   stopAlarm(): void;
   canUseFullScreenIntent(): boolean;
   openFullScreenIntentSettings(): void;
@@ -27,7 +49,19 @@ function safe<T>(fn: () => T, fallback: T): T {
 
 export const GeoAlarm = {
   available: !!native,
-  triggerAlarm: (title: string, body: string) => safe(() => native!.triggerAlarm(title, body), undefined),
+  triggerAlarm: (title: string, body: string, kind: RingKind, sound: string | null, durationMs: number) =>
+    safe(() => native!.triggerAlarm(title, body, kind, sound, durationMs), undefined),
+  scheduleRing: (spec: RingSpec) => safe(() => native!.scheduleRing(JSON.stringify(spec)), undefined),
+  cancelRing: (id: string) => safe(() => native!.cancelRing(id), undefined),
+  getScheduledRingIds: () => safe(() => native!.getScheduledRingIds(), [] as string[]),
+  getSoundTitle: (uri: string | null) => safe(() => native!.getSoundTitle(uri), 'ברירת מחדל'),
+  pickSound: async (current: string | null, title: string) => {
+    try {
+      return native ? await native.pickSound(current, title) : null;
+    } catch {
+      return null;
+    }
+  },
   stopAlarm: () => safe(() => native!.stopAlarm(), undefined),
   canUseFullScreenIntent: () => safe(() => native!.canUseFullScreenIntent(), false),
   openFullScreenIntentSettings: () => safe(() => native!.openFullScreenIntentSettings(), undefined),

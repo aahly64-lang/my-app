@@ -13,6 +13,15 @@ import {
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from '../modules/geo-alarm';
+import { ringNow } from './rings';
+import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
+
+const SOUND_ROWS: [SoundKind, string][] = [
+  ['alarm', '⏰ שעון מעורר'],
+  ['timer', '⏱️ טיימר'],
+  ['reminder', '📝 תזכורות פתקים'],
+  ['geo', '📍 התראת מיקום'],
+];
 
 interface Props {
   visible: boolean;
@@ -99,6 +108,19 @@ function Step({
 
 export default function SetupScreen({ visible, onClose, onExport, onImport }: Props) {
   const [status, setStatus] = useState<Status>(EMPTY);
+  const [sounds, setSounds] = useState<SoundSettings>({});
+
+  useEffect(() => {
+    if (visible) loadSounds().then(setSounds);
+  }, [visible]);
+
+  const chooseSound = async (kind: SoundKind, label: string) => {
+    const picked = await GeoAlarm.pickSound(sounds[kind] ?? null, label);
+    if (!picked) return;
+    const next = { ...sounds, [kind]: picked.uri };
+    setSounds(next);
+    await saveSounds(next);
+  };
 
   const refresh = useCallback(async () => setStatus(await readPermissionStatus()), []);
 
@@ -148,7 +170,7 @@ export default function SetupScreen({ visible, onClose, onExport, onImport }: Pr
   const testAlarm = () => {
     Alert.alert('בדיקת צלצול', 'השעון יצלצל עכשיו בעוצמה מרבית. לעצירה לחץ "עצור".', [
       { text: 'ביטול', style: 'cancel' },
-      { text: 'צלצל', onPress: () => GeoAlarm.triggerAlarm('בדיקת צלצול', 'כך ייראה השעון המעורר') },
+      { text: 'צלצל', onPress: () => ringNow('alarm', 'בדיקת צלצול', 'כך ייראה השעון המעורר') },
     ]);
   };
 
@@ -228,6 +250,19 @@ export default function SetupScreen({ visible, onClose, onExport, onImport }: Pr
             <Text style={styles.testBtnText}>🔔 בדיקת צלצול</Text>
           </TouchableOpacity>
 
+          <Text style={styles.section}>צלילים</Text>
+          <Text style={styles.intro}>
+            בחר צליל לכל סוג צלצול מתוך הצלילים של הטלפון. ברירת המחדל: צליל השעון המעורר של הטלפון.
+          </Text>
+          {SOUND_ROWS.map(([kind, label]) => (
+            <TouchableOpacity key={kind} style={styles.soundRow} onPress={() => chooseSound(kind, label)}>
+              <Text style={styles.stepTitle}>{label}</Text>
+              <Text style={styles.soundName} numberOfLines={1}>
+                {GeoAlarm.getSoundTitle(sounds[kind] ?? null)} ◂
+              </Text>
+            </TouchableOpacity>
+          ))}
+
           <Text style={styles.section}>גיבוי ושחזור</Text>
           <Text style={styles.intro}>
             כל המידע (פתקים, סרטונים, אזורים) שמור רק בטלפון. מומלץ לגבות מדי פעם ולשמור את הקובץ בדרייב, במייל או בווטסאפ.
@@ -293,6 +328,16 @@ const styles = StyleSheet.create({
   stepBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
   testBtn: { backgroundColor: '#DC2626', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginVertical: 14 },
   testBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
+  soundRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+    gap: 8,
+  },
+  soundName: { maxWidth: '55%', fontSize: 13, color: '#0284C7', fontWeight: '700' },
   backupBtn: { backgroundColor: '#0284C7', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
   backupBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
   restoreBtn: { backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#0284C7' },

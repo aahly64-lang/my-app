@@ -1,6 +1,6 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { GeoAlarm } from '../modules/geo-alarm';
+import { ringNow } from './rings';
 import {
   AlarmArea,
   loadAreas,
@@ -67,7 +67,7 @@ TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK, async ({ data, error }) 
   states[id] = { ...states[id], lastRingAt: now };
   await saveAreaStates(states);
 
-  GeoAlarm.triggerAlarm(area.label || 'הגעת לאזור', area.note?.trim() || 'נכנסת לאזור שהגדרת');
+  await ringNow('geo', area.label || 'הגעת לאזור', area.note?.trim() || 'נכנסת לאזור שהגדרת');
 
   if (area.mode === 'once') {
     const updated = areas.map((a) => (a.id === id ? { ...a, enabled: false } : a));

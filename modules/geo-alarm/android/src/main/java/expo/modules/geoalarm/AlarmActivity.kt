@@ -18,12 +18,14 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.lang.ref.WeakReference
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 class AlarmActivity : Activity() {
   private val handler = Handler(Looper.getMainLooper())
+  private var ring: JSONObject = JSONObject()
 
   companion object {
     private var current: WeakReference<AlarmActivity>? = null
@@ -53,12 +55,18 @@ class AlarmActivity : Activity() {
     }
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-    val title = intent?.getStringExtra(AlarmNotifier.EXTRA_TITLE) ?: "התראת מיקום"
-    val body = intent?.getStringExtra(AlarmNotifier.EXTRA_BODY) ?: ""
+    ring = try {
+      JSONObject(intent?.getStringExtra(AlarmNotifier.EXTRA_RING) ?: "{}")
+    } catch (e: Exception) {
+      JSONObject()
+    }
+    val title = ring.optString("title", "שעון מעורר")
+    val body = ring.optString("body", "")
 
     setContentView(buildLayout(title, body))
 
-    handler.postDelayed({ stopAndClose() }, AlarmNotifier.ALARM_DURATION_MS)
+    val duration = ring.optLong("durationMs", AlarmNotifier.DEFAULT_DURATION_MS)
+    handler.postDelayed({ stopAndClose() }, if (duration > 0) duration else AlarmNotifier.DEFAULT_DURATION_MS)
   }
 
   private fun dp(value: Int): Int =
@@ -83,7 +91,12 @@ class AlarmActivity : Activity() {
     root.addView(time)
 
     val icon = TextView(this).apply {
-      text = "📍"
+      text = when (ring.optString("kind")) {
+        "geo" -> "📍"
+        "timer" -> "⏱️"
+        "reminder" -> "📝"
+        else -> "⏰"
+      }
       setTextSize(TypedValue.COMPLEX_UNIT_SP, 48f)
       gravity = Gravity.CENTER
       setPadding(0, dp(16), 0, dp(8))
@@ -127,7 +140,31 @@ class AlarmActivity : Activity() {
     }
     root.addView(stop, params)
 
+    if (AlarmNotifier.canSnooze(ring)) {
+      val snooze = Button(this).apply {
+        text = "נודניק " + ring.optInt("snoozeMin") + " דק'"
+        setTextColor(Color.parseColor("#0F172A"))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+        typeface = Typeface.DEFAULT_BOLD
+        isAllCaps = false
+        background = GradientDrawable().apply {
+          setColor(Color.parseColor("#FACC15"))
+          cornerRadius = dp(40).toFloat()
+        }
+        setOnClickListener { snoozeAndClose() }
+      }
+      val sp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(80)).apply {
+        topMargin = dp(20)
+      }
+      root.addView(snooze, sp)
+    }
+
     return root
+  }
+
+  private fun snoozeAndClose() {
+    try { RingScheduler.snooze(this, ring) } catch (e: Exception) {}
+    stopAndClose()
   }
 
   private fun stopAndClose() {

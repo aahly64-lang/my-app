@@ -13,6 +13,7 @@ export interface StickyNote {
   updatedAt: string; // ISO timestamp
   done?: boolean;
   scheduleEnabled?: boolean;
+  reminderMode?: 'ring' | 'silent'; // default ring
   scheduleDate?: string; // YYYY-MM-DD
   scheduleTime?: string; // HH:MM
   notificationId?: string | null;
@@ -138,3 +139,28 @@ export function formatHebrewDate(iso: string): string {
 export function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// ---------- alarm clocks & sounds ----------
+
+export const ALARMS_KEY = '@avi_alarm_clocks_v1';
+export const SOUNDS_KEY = '@avi_sounds_v1';
+
+export interface AlarmClock {
+  id: string;
+  label: string;
+  hour: number;
+  minute: number;
+  days: number[]; // 0 = Sunday ... 6 = Saturday; empty = one-time
+  enabled: boolean;
+  snoozeEnabled: boolean;
+  snoozeMin: number;
+  snoozeCount: number; // -1 = unlimited
+}
+
+export type SoundKind = 'alarm' | 'timer' | 'reminder' | 'geo';
+export type SoundSettings = Partial<Record<SoundKind, string>>; // uri; missing = phone default alarm sound
+
+export const loadAlarmClocks = async () => (await readJson<AlarmClock[]>(ALARMS_KEY)) ?? [];
+export const saveAlarmClocks = (a: AlarmClock[]) => writeJson(ALARMS_KEY, a);
+export const loadSounds = async () => (await readJson<SoundSettings>(SOUNDS_KEY)) ?? {};
+export const saveSounds = (s: SoundSettings) => writeJson(SOUNDS_KEY, s);

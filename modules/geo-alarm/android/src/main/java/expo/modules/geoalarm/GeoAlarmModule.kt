@@ -3,11 +3,14 @@ package expo.modules.geoalarm
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.Exceptions
+import org.json.JSONObject
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -16,6 +19,17 @@ class GeoAlarmModule : Module() {
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
 
   private var consumedIntentHash: Int? = null
+  private var pendingSoundPromise: Promise? = null
+  private val soundRequestCode = 46077
+
+  private fun soundTitle(uri: String?): String {
+    return try {
+      val u = if (uri.isNullOrBlank()) AlarmNotifier.defaultSoundUri() else Uri.parse(uri)
+      RingtoneManager.getRingtone(context, u)?.getTitle(context) ?: "ברירת מחדל"
+    } catch (e: Exception) {
+      "ברירת מחדל"
+    }
+  }
 
   private fun extractSharedText(intent: Intent?): String? {
     if (intent == null || intent.action != Intent.ACTION_SEND) return null
@@ -41,9 +55,70 @@ class GeoAlarmModule : Module() {
 
     Events("onSharedText")
 
-    Function("triggerAlarm") { title: String, body: String ->
-      AlarmNotifier.show(context, title, body)
+    Function("triggerAlarm") { title: String, body: String, kind: String, sound: String?, durationMs: Double ->
+      AlarmNotifier.showSimple(context, title, body, kind, sound, durationMs.toLong())
       Unit
+    }
+
+    Function("scheduleRing") { json: String ->
+      RingScheduler.schedule(context, JSONObject(json))
+      Unit
+    }
+
+    Function("cancelRing") { id: String ->
+      RingScheduler.cancel(context, id)
+      RingScheduler.cancel(context, "$id:snooze")
+      Unit
+    }
+
+    Function("getScheduledRingIds") {
+      RingScheduler.ids(context)
+    }
+
+    Function("getSoundTitle") { uri: String? ->
+      soundTitle(uri)
+    }
+
+    AsyncFunction("pickSound") { current: String?, title: String, promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.resolve(null)
+        return@AsyncFunction
+      }
+      pendingSoundPromise?.resolve(null)
+      pendingSoundPromise = promise
+      val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, AlarmNotifier.defaultSoundUri())
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, title)
+        if (!current.isNullOrBlank()) {
+          putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(current))
+        } else {
+          putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, AlarmNotifier.defaultSoundUri())
+        }
+      }
+      try {
+        activity.startActivityForResult(intent, soundRequestCode)
+      } catch (e: Exception) {
+        pendingSoundPromise = null
+        promise.resolve(null)
+      }
+    }
+
+    OnActivityResult { _, payload ->
+      if (payload.requestCode != soundRequestCode) return@OnActivityResult
+      val promise = pendingSoundPromise ?: return@OnActivityResult
+      pendingSoundPromise = null
+      if (payload.resultCode != android.app.Activity.RESULT_OK) {
+        promise.resolve(null)
+        return@OnActivityResult
+      }
+      @Suppress("DEPRECATION")
+      val picked: Uri? = payload.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+      val uriString = picked?.toString() ?: ""
+      promise.resolve(mapOf("uri" to uriString, "title" to soundTitle(uriString)))
     }
 
     Function("stopAlarm") {
