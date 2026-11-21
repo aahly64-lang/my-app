@@ -102,8 +102,8 @@ class GeoAlarmModule : Module() {
     }
 
     AsyncFunction("audioWaveform") { src: String, buckets: Int ->
-      val dur = RingtoneMaker.durationMs(context, src)
-      RingtoneMaker.waveform(src, buckets, dur).map { it.toDouble() }
+      val w = RingtoneMaker.waveform(src, buckets)
+      mapOf("peaks" to w.peaks.map { it.toDouble() }, "durationMs" to w.durationMs.toDouble())
     }
 
     AsyncFunction("makeRingtone") { src: String, startMs: Double, endMs: Double, fadeMs: Double, fadeOutMs: Double, id: String, name: String ->
@@ -125,8 +125,8 @@ class GeoAlarmModule : Module() {
       Unit
     }
 
-    Function("previewAudio") { src: String, startMs: Double, endMs: Double, fadeMs: Double, fadeOutMs: Double ->
-      RingtoneMaker.preview(context, src, startMs.toLong(), endMs.toLong(), fadeMs.toLong(), fadeOutMs.toLong())
+    Function("previewAudio") { src: String, startMs: Double, endMs: Double, fadeBaseMs: Double, fadeMs: Double, fadeOutMs: Double ->
+      RingtoneMaker.preview(context, src, startMs.toLong(), endMs.toLong(), fadeBaseMs.toLong(), fadeMs.toLong(), fadeOutMs.toLong())
       Unit
     }
 

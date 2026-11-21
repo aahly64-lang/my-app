@@ -51,7 +51,7 @@ type GeoAlarmNative = {
   openAppSettings(): void;
   getInitialSharedText(): string | null;
   audioDuration(src: string): number;
-  audioWaveform(src: string, buckets: number): Promise<number[]>;
+  audioWaveform(src: string, buckets: number): Promise<{ peaks: number[]; durationMs: number }>;
   makeRingtone(
     src: string,
     startMs: number,
@@ -63,7 +63,7 @@ type GeoAlarmNative = {
   ): Promise<{ path: string; mediaUri: string | null }>;
   renameRingtone(mediaUri: string | null, name: string): void;
   deleteRingtone(path: string | null, mediaUri: string | null): void;
-  previewAudio(src: string, startMs: number, endMs: number, fadeMs: number, fadeOutMs: number): void;
+  previewAudio(src: string, startMs: number, endMs: number, fadeBaseMs: number, fadeMs: number, fadeOutMs: number): void;
   previewPosition(): number;
   stopPreview(): void;
   canWriteSettings(): boolean;
@@ -119,7 +119,7 @@ export const GeoAlarm = {
   getInitialSharedText: () => safe(() => native!.getInitialSharedText(), null),
   audioDuration: (src: string) => safe(() => native!.audioDuration(src), 0),
   /** Cuts [startMs,endMs] with optional fade-in; throws a Hebrew message on failure. */
-  audioWaveform: async (src: string, buckets: number): Promise<number[] | null> => {
+  audioWaveform: async (src: string, buckets: number): Promise<{ peaks: number[]; durationMs: number } | null> => {
     try {
       return native ? await native.audioWaveform(src, buckets) : null;
     } catch {
@@ -141,9 +141,10 @@ export const GeoAlarm = {
   renameRingtone: (mediaUri: string | null, name: string) => safe(() => native!.renameRingtone(mediaUri, name), undefined),
   deleteRingtone: (path: string | null, mediaUri: string | null) =>
     safe(() => native!.deleteRingtone(path, mediaUri), undefined),
-  previewAudio: (src: string, startMs: number, endMs: number, fadeMs: number, fadeOutMs = 0) =>
+  /** Plays [startMs,endMs]; fades are measured from fadeBaseMs (the selection start) and endMs. */
+  previewAudio: (src: string, startMs: number, endMs: number, fadeBaseMs: number, fadeMs = 0, fadeOutMs = 0) =>
     safe(() => {
-      native!.previewAudio(src, startMs, endMs, fadeMs, fadeOutMs);
+      native!.previewAudio(src, startMs, endMs, fadeBaseMs, fadeMs, fadeOutMs);
       return true;
     }, false),
   previewPosition: () => safe(() => native!.previewPosition(), -1),

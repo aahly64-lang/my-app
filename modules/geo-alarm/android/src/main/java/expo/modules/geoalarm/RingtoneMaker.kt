@@ -266,10 +266,14 @@ object RingtoneMaker {
   /**
    * Peak level (0..1) of [buckets] equal slices of the whole file, for drawing a waveform.
    */
-  fun waveform(src: String, buckets: Int, durationMs: Long): FloatArray {
-    val peaks = FloatArray(buckets)
-    if (durationMs <= 0) return peaks
-    val durUs = durationMs * 1000.0
+  class Wave(val peaks: FloatArray, val durationMs: Long)
+
+  private const val BIN_US = 20_000L // 20 ms bins while decoding
+
+  fun waveform(src: String, buckets: Int): Wave {
+    var bins = FloatArray(30_000) // grows if needed
+    var maxBin = -1
+    var lastUs = 0L
     val extractor = MediaExtractor()
     extractor.setDataSource(localPath(src))
     var trackIndex = -1
@@ -284,7 +288,7 @@ object RingtoneMaker {
     }
     if (trackIndex < 0 || fmt == null) {
       extractor.release()
-      return peaks
+      return Wave(FloatArray(buckets), 0L)
     }
     extractor.selectTrack(trackIndex)
     val decoder = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
@@ -335,10 +339,14 @@ object RingtoneMaker {
               val pos = f * frameBytes
               val v = if (floatPcm) Math.abs(data.getFloat(pos)) else Math.abs(data.getShort(pos).toInt()) / 32768f
               val t = info.presentationTimeUs + f * 1_000_000L / sampleRate
-              val b = ((t / durUs) * buckets).toInt().coerceIn(0, buckets - 1)
-              if (v > peaks[b]) peaks[b] = v
+              val b = (t / BIN_US).toInt().coerceAtLeast(0)
+              if (b >= bins.size) bins = bins.copyOf(maxOf(b + 1, bins.size * 2))
+              if (v > bins[b]) bins[b] = v
+              if (b > maxBin) maxBin = b
               f += 8
             }
+            val endUs = info.presentationTimeUs + frames * 1_000_000L / sampleRate
+            if (endUs > lastUs) lastUs = endUs
           }
           if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
           decoder.releaseOutputBuffer(o, false)
@@ -349,9 +357,17 @@ object RingtoneMaker {
       try { decoder.release() } catch (_: Exception) {}
       try { extractor.release() } catch (_: Exception) {}
     }
-    val max = peaks.maxOrNull() ?: 0f
-    if (max > 0f) for (i in peaks.indices) peaks[i] = (peaks[i] / max).coerceIn(0f, 1f)
-    return peaks
+    val peaks = FloatArray(buckets)
+    val nBins = maxBin + 1
+    if (nBins > 0) {
+      for (i in 0 until nBins) {
+        val b = (i.toLong() * buckets / nBins).toInt().coerceIn(0, buckets - 1)
+        if (bins[i] > peaks[b]) peaks[b] = bins[i]
+      }
+      val max = peaks.maxOrNull() ?: 0f
+      if (max > 0f) for (i in peaks.indices) peaks[i] = (peaks[i] / max).coerceIn(0f, 1f)
+    }
+    return Wave(peaks, lastUs / 1000)
   }
 
   // ---------------------------------------------------------------- phone ringtones
@@ -458,17 +474,20 @@ object RingtoneMaker {
     }
   }
 
-  fun preview(ctx: Context, src: String, startMs: Long, endMs: Long, fadeMs: Long, fadeOutMs: Long) {
+  fun preview(ctx: Context, src: String, startMs: Long, endMs: Long, fadeBaseMs: Long, fadeMs: Long, fadeOutMs: Long) {
     stopPreview()
     val p = MediaPlayer()
     if (src.startsWith("content://")) p.setDataSource(ctx, Uri.parse(src)) else p.setDataSource(localPath(src))
     p.prepare()
     p.seekTo(startMs.toInt())
     stopAt = endMs
-    fadeAt = startMs
+    fadeAt = fadeBaseMs
     fadeLen = fadeMs
     fadeOutLen = fadeOutMs
-    if (fadeMs > 0) p.setVolume(0f, 0f)
+    if (fadeMs > 0) {
+      val g = ((startMs - fadeBaseMs).toFloat() / fadeMs).coerceIn(0f, 1f)
+      p.setVolume(g, g)
+    }
     p.start()
     player = p
     handler.post(ticker)
