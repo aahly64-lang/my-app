@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Share, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import DraggableFlatList, { RenderItemParams } from 'react-native-draggable-flatlist';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import { Feather } from '@expo/vector-icons';
 import { useAppStyles } from './appStyles';
 import { useTheme } from './theme';
 import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './ui';
@@ -324,7 +325,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
             hitSlop={10}
             style={[styles.checkbox, styles.taskCheckbox, t.done && styles.checkboxOn]}
           >
-            {t.done ? <Text style={styles.checkMark}>✓</Text> : null}
+            {t.done ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
           </TouchableOpacity>
           <View style={styles.flex1}>
             <Text style={[styles.taskTitle, t.done && styles.strike]} numberOfLines={2}>
@@ -439,7 +440,9 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
             />
             <View style={styles.switchRowPlain}>
               <Text style={styles.label}>⭐ חשובה</Text>
-              <Switch value={!!edit.star} onValueChange={(v) => setEdit({ ...edit, star: v })} />
+              <Switch
+                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
+                thumbColor="#FFFFFF" value={!!edit.star} onValueChange={(v) => setEdit({ ...edit, star: v })} />
             </View>
 
             <Text style={styles.label}>תאריך יעד (לא חובה)</Text>
@@ -511,7 +514,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
                   }
                   style={[styles.checkbox, styles.taskCheckbox, s.done && styles.checkboxOn]}
                 >
-                  {s.done ? <Text style={styles.checkMark}>✓</Text> : null}
+                  {s.done ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
                 </TouchableOpacity>
                 <Text style={[styles.flex1, styles.subtaskText, s.done && styles.strike]}>{s.title}</Text>
                 <TouchableOpacity
@@ -553,10 +556,10 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
                 <Text style={styles.whiteBtnText}>שמור</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.blueBtnFlex} onPress={toNote}>
-                <Text style={styles.whiteBtnText}>→ לפתק</Text>
+                <Text style={styles.softBtnText}>→ לפתק</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.redBtn} onPress={deleteFromEdit}>
-                <Text style={styles.whiteBtnText}>מחק</Text>
+                <Text style={styles.dangerBtnText}>מחק</Text>
               </TouchableOpacity>
             </View>
           </>

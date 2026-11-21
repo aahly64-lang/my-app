@@ -519,10 +519,10 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
               <Text style={styles.whiteBtnText}>שמור</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.blueBtnFlex} onPress={() => editing && openVideo(editing.url)}>
-              <Text style={styles.whiteBtnText}>צפה</Text>
+              <Text style={styles.softBtnText}>צפה</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.redBtn} onPress={deleteVideo}>
-              <Text style={styles.whiteBtnText}>מחק</Text>
+              <Text style={styles.dangerBtnText}>מחק</Text>
             </TouchableOpacity>
           </View>
         </PopupShell>
