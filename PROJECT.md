@@ -95,3 +95,11 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 ## סטטוס
 - גרסה 4 (שלב א' + שלב ב') נבנתה במלואה ב-21/11/2026 – ממתינה לבדיקה של אבי בטלפון.
 - קבצים חדשים: src/theme.ts, src/appStyles.ts, src/ui.tsx, src/pickers.ts, src/WorkoutsTab.tsx, src/TasksTab.tsx, src/DocsTab.tsx, modules/geo-alarm/.../DocumentsHelper.kt.
+
+## עיצוב "גרפיט וצהוב" (אושר ע"י אבי, 21/11/2026, גרסה 1.4.0)
+- הדמיה: https://claude.ai/artifact/94PpspaxXkv7Bsav6mtpMt (כיוון ב').
+- רק שכבת המראה: צבעים ב-`src/theme.ts` (LIGHT/DARK), סגנונות ב-`src/appStyles.ts` ובסוף `src/SetupScreen.tsx`. הלוגיקה לא שונתה.
+- צהוב #FFD60A = כפתור ראשי, טאב פעיל, שבבים (טקסט כהה עליו). כפתור משני אפור, מחיקה באדום רך. פתקים = כרטיסים לבנים/גרפיט עם תגית תזכורת צהובה.
+- גופן Heebo מוטמע ב-APK (תוסף expo-font ב-app.json); `withFonts` ממיר fontWeight למשפחת הגופן המתאימה.
+- אייקונים: @expo/vector-icons (Feather + MaterialCommunityIcons לכושר).
+- מצב לילה: נשאר כמו בגרסה 4 (אוטומטי / בהיר / כהה בהגדרות).
