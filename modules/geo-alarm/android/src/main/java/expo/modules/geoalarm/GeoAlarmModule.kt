@@ -22,6 +22,9 @@ class GeoAlarmModule : Module() {
   private var pendingSoundPromise: Promise? = null
   private var pendingScanPromise: Promise? = null
   private val scanRequestCode = 4721
+  private var scanQuality = "normal"
+  private var pendingContactPromise: Promise? = null
+  private val contactRequestCode = 4722
   private val soundRequestCode = 46077
 
   private fun soundTitle(uri: String?): String {
@@ -220,8 +223,34 @@ class GeoAlarmModule : Module() {
       DocumentsHelper.createFolder(context, parentUri, name)
     }
 
+    /** System contact picker (phone numbers). No contacts permission needed for the picked entry. */
+    AsyncFunction("pickContact") { promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.resolve(null)
+        return@AsyncFunction
+      }
+      pendingContactPromise?.resolve(null)
+      pendingContactPromise = promise
+      try {
+        val intent = Intent(Intent.ACTION_PICK, android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI)
+        activity.startActivityForResult(intent, contactRequestCode)
+      } catch (e: Exception) {
+        pendingContactPromise = null
+        promise.resolve(null)
+      }
+    }
+
+    AsyncFunction("moveDocument") { src: String, srcParent: String, destFolder: String ->
+      DocumentsHelper.move(context, src, srcParent, destFolder)
+    }
+
+    AsyncFunction("rotatePdf") { uri: String, degrees: Int ->
+      ScanEnhancer.rotatePdf(context, uri, degrees)
+    }
+
     /** Google's document scanner: returns the content uri of the scanned PDF, or null if cancelled. */
-    AsyncFunction("scanDocument") { promise: Promise ->
+    AsyncFunction("scanDocument") { quality: String, promise: Promise ->
       val activity = appContext.currentActivity
       if (activity == null) {
         promise.reject("ERR_SCAN", "אין מסך פעיל", null)
@@ -229,6 +258,7 @@ class GeoAlarmModule : Module() {
       }
       pendingScanPromise?.resolve(null)
       pendingScanPromise = promise
+      scanQuality = quality
       try {
         val options = com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder()
           .setGalleryImportAllowed(true)
@@ -260,6 +290,29 @@ class GeoAlarmModule : Module() {
     }
 
     OnActivityResult { _, payload ->
+      if (payload.requestCode == contactRequestCode) {
+        val promise = pendingContactPromise ?: return@OnActivityResult
+        pendingContactPromise = null
+        val uri = payload.data?.data
+        if (payload.resultCode != android.app.Activity.RESULT_OK || uri == null) {
+          promise.resolve(null)
+          return@OnActivityResult
+        }
+        try {
+          val cols = arrayOf(
+            android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+          )
+          var result: Map<String, String>? = null
+          context.contentResolver.query(uri, cols, null, null, null)?.use { c ->
+            if (c.moveToFirst()) result = mapOf("name" to (c.getString(0) ?: ""), "phone" to (c.getString(1) ?: ""))
+          }
+          promise.resolve(result)
+        } catch (e: Exception) {
+          promise.resolve(null)
+        }
+        return@OnActivityResult
+      }
       if (payload.requestCode == scanRequestCode) {
         val promise = pendingScanPromise ?: return@OnActivityResult
         pendingScanPromise = null
@@ -272,7 +325,7 @@ class GeoAlarmModule : Module() {
         val pages = result?.pages?.map { it.imageUri } ?: emptyList()
         // Clean every page the same way, off the main thread; fall back to the scanner's PDF.
         Thread {
-          val enhanced = try { ScanEnhancer.enhance(context, pages) } catch (e: Throwable) { null }
+          val enhanced = if (scanQuality == "original") null else try { ScanEnhancer.enhance(context, pages, scanQuality) } catch (e: Throwable) { null }
           val uri = enhanced ?: pdf?.uri?.toString()
           val count = if (pages.isNotEmpty()) pages.size else (pdf?.pageCount ?: 0)
           promise.resolve(

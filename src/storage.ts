@@ -253,7 +253,31 @@ export interface Task {
   areaId?: string; // remind when entering this location area
   subtasks?: SubTask[];
   docs?: DocLink[]; // attached documents
+  list?: string; // TaskList id
+  contact?: { name: string; phone: string };
+  photos?: string[]; // file uris in the app's own folder
 }
+
+export interface TaskList {
+  id: string;
+  name: string;
+}
+
+export interface TaskTemplate {
+  id: string;
+  name: string;
+  items: string[];
+}
+
+export const TASK_LISTS_KEY = '@avi_task_lists_v1';
+export const TASK_TEMPLATES_KEY = '@avi_task_templates_v1';
+export const TASK_MORNING_KEY = '@avi_task_morning_v1';
+export const loadTaskLists = async () => (await readJson<TaskList[]>(TASK_LISTS_KEY)) ?? [];
+export const saveTaskLists = (l: TaskList[]) => writeJson(TASK_LISTS_KEY, l);
+export const loadTaskTemplates = async () => (await readJson<TaskTemplate[]>(TASK_TEMPLATES_KEY)) ?? [];
+export const saveTaskTemplates = (t: TaskTemplate[]) => writeJson(TASK_TEMPLATES_KEY, t);
+export const loadMorning = async () => (await readJson<{ enabled: boolean; time: string }>(TASK_MORNING_KEY)) ?? { enabled: false, time: '07:30' };
+export const saveMorning = (m: { enabled: boolean; time: string }) => writeJson(TASK_MORNING_KEY, m);
 
 export interface DocFolder {
   uri: string;
@@ -383,3 +407,8 @@ export const loadStopwatch = async () =>
 export const saveStopwatch = (s: StopwatchState) => writeJson(STOPWATCH_KEY, s);
 export const loadJournals = async () => (await readJson<Journal[]>(JOURNALS_KEY)) ?? [];
 export const saveJournals = (j: Journal[]) => writeJson(JOURNALS_KEY, j);
+
+export const SCAN_QUALITY_KEY = '@avi_scan_quality_v1';
+export type ScanQuality = 'small' | 'normal' | 'high' | 'original';
+export const loadScanQuality = async () => ((await readJson<string>(SCAN_QUALITY_KEY)) as ScanQuality | null) ?? 'normal';
+export const saveScanQuality = (q: ScanQuality) => writeJson(SCAN_QUALITY_KEY, q);

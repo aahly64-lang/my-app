@@ -2,7 +2,7 @@
   "expo": {
     "name": "יומן ושולחן עבודה",
     "slug": "my-personal-board-apk",
-    "version": "1.8.1",
+    "version": "1.9.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -16,7 +16,7 @@
     },
     "android": {
       "package": "com.avi.personalboard",
-      "versionCode": 14,
+      "versionCode": 15,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F172A"
@@ -34,7 +34,8 @@
         "VIBRATE",
         "WAKE_LOCK",
         "USE_BIOMETRIC",
-        "USE_FINGERPRINT"
+        "USE_FINGERPRINT",
+        "CAMERA"
       ],
       "intentFilters": [
         {
@@ -83,6 +84,13 @@
         "expo-local-authentication",
         {
           "faceIDPermission": "פתיחת יומן נעול"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "צילום תמונה למשימה",
+          "photosPermission": "צירוף תמונה למשימה"
         }
       ]
     ],

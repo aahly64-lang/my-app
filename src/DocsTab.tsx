@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { DocEntry, GeoAlarm } from '../modules/geo-alarm';
 import { Palette, cardShadow, useTheme, useThemedStyles } from './theme';
 import { PopupShell, confirm } from './ui';
@@ -27,6 +28,9 @@ import {
   loadDocMeta,
   loadDocRecent,
   loadDocView,
+  loadScanQuality,
+  ScanQuality,
+  saveScanQuality,
   loadTasks,
   newId,
   saveDocFolders,
@@ -84,6 +88,16 @@ function hash(s: string) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return (h >>> 0).toString(16);
 }
+const QUALITY_LABEL: Record<ScanQuality, string> = {
+  small: 'קטן (לוואטסאפ ומייל)',
+  normal: 'רגיל',
+  high: 'גבוה (כתב קטן)',
+  original: 'מקורי, בלי שיפור',
+};
+
+type Rect = { x: number; y: number; w: number; h: number };
+const inRect = (r: Rect, x: number, y: number) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+
 const docRingId = (uri: string) => `doc:${hash(uri)}`;
 
 function daysUntil(ymd: string) {
@@ -168,12 +182,26 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const [meta, setMeta] = useState<Record<string, DocMeta>>({});
   const [recent, setRecent] = useState<RecentDoc[]>([]);
   const [menu, setMenu] = useState<DocEntry | null>(null);
-  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link'>('menu');
+  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link' | 'rotate'>('menu');
   const [renameText, setRenameText] = useState('');
   const [selected, setSelected] = useState<Set<string> | null>(null); // multi-select
   const [scanPick, setScanPick] = useState<{ uri: string; name: string } | null>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null); // name being typed
   const [scanBusy, setScanBusy] = useState(false);
+  const [quality, setQuality] = useState<ScanQuality>('normal');
+  const [qualityPick, setQualityPick] = useState(false);
+  // move to…
+  const [moveItems, setMoveItems] = useState<DocEntry[] | null>(null);
+  const [movePath, setMovePath] = useState<DocFolder[]>([]);
+  const [moveDirs, setMoveDirs] = useState<DocEntry[] | null>(null);
+  // drag & drop
+  const [drag, setDrag] = useState<{ e: DocEntry; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<string | null>(null);
+  const rootRef = useRef<View>(null);
+  const rootPos = useRef({ x: 0, y: 0 });
+  const targetRefs = useRef<Record<string, View | null>>({});
+  const targetRects = useRef<Record<string, Rect>>({});
+  const busyMove = useRef(false);
   const [width, setWidth] = useState(360);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -182,10 +210,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     loadDocMeta().then(setMeta);
     loadDocRecent().then(setRecent);
     loadDocView().then(setView);
+    loadScanQuality().then(setQuality);
     setPath([]);
   }, [dataVersion]);
 
   const current = path[path.length - 1];
+  useEffect(() => {
+    targetRefs.current = {};
+  }, [current]);
 
   const refresh = useCallback(async () => {
     if (!current) return;
@@ -316,7 +348,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     let r: { uri: string; pages: number } | null = null;
     setScanBusy(true);
     try {
-      r = await GeoAlarm.scanDocument();
+      r = await GeoAlarm.scanDocument(quality);
     } catch (e: any) {
       Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (e?.message ?? ''));
       return;
@@ -401,6 +433,117 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     setRecent(rec);
     await saveDocRecent(rec);
   };
+
+  // ---------- moving ----------
+  const relocate = async (pairs: [string, string][]) => {
+    const m = { ...meta };
+    let metaChanged = false;
+    for (const [from, to] of pairs) {
+      if (m[from]) {
+        m[to] = m[from];
+        delete m[from];
+        metaChanged = true;
+        cancelRing(docRingId(from));
+        if (m[to].expiry) await scheduleExpiry(to, m[to]);
+      }
+    }
+    if (metaChanged) {
+      setMeta(m);
+      await saveDocMeta(m);
+    }
+    const map = new Map(pairs);
+    const rec = recent.map((r) => (map.has(r.uri) ? { ...r, uri: map.get(r.uri)! } : r));
+    setRecent(rec);
+    await saveDocRecent(rec);
+  };
+
+  const moveTo = async (list: DocEntry[], dest: DocFolder) => {
+    if (!current || busyMove.current) return;
+    busyMove.current = true;
+    const pairs: [string, string][] = [];
+    let failed = 0;
+    for (const e of list) {
+      if (e.uri === dest.uri) continue;
+      const to = await GeoAlarm.moveDocument(e.uri, current.uri, dest.uri);
+      if (to) pairs.push([e.uri, to]);
+      else failed++;
+    }
+    await relocate(pairs);
+    busyMove.current = false;
+    setSelected(null);
+    setMoveItems(null);
+    refresh();
+    if (failed) Alert.alert('העברה', `${failed} פריטים לא הועברו. ייתכן שאין הרשאת כתיבה.`);
+  };
+
+  const openMoveTo = (list: DocEntry[]) => {
+    closeMenu();
+    setMoveItems(list);
+    setMovePath([]);
+    setMoveDirs(null);
+  };
+
+  useEffect(() => {
+    const f = movePath[movePath.length - 1];
+    if (!f) {
+      setMoveDirs(null);
+      return;
+    }
+    setMoveDirs(null);
+    GeoAlarm.listDocuments(f.uri).then((l) => setMoveDirs((l ?? []).filter((x) => x.isDir)));
+  }, [movePath]);
+
+  // ---------- drag & drop (inside a folder) ----------
+  const measureTargets = () => {
+    targetRects.current = {};
+    rootRef.current?.measureInWindow((x, y) => (rootPos.current = { x, y }));
+    for (const [key, v] of Object.entries(targetRefs.current)) {
+      v?.measureInWindow((x, y, w, h) => {
+        targetRects.current[key] = { x, y, w, h };
+      });
+    }
+  };
+  const targetAt = (x: number, y: number) => {
+    for (const [key, r] of Object.entries(targetRects.current)) if (inRect(r, x, y)) return key;
+    return null;
+  };
+  const dropOn = (e: DocEntry, key: string | null) => {
+    if (!key || !current || key === e.uri) return;
+    if (key === '__up') {
+      const parent = path[path.length - 2];
+      if (parent) moveTo([e], parent);
+      return;
+    }
+    const dir = entries.find((x) => x.uri === key && x.isDir);
+    if (dir) moveTo([e], { uri: dir.uri, name: dir.name });
+  };
+  const dragGesture = (e: DocEntry) =>
+    Gesture.Pan()
+      .runOnJS(true)
+      .activateAfterLongPress(350)
+      .onStart((ev) => {
+        measureTargets();
+        setDrag({ e, x: ev.absoluteX, y: ev.absoluteY });
+      })
+      .onUpdate((ev) => {
+        setDrag({ e, x: ev.absoluteX, y: ev.absoluteY });
+        setHover(targetAt(ev.absoluteX, ev.absoluteY));
+      })
+      .onEnd((ev) => dropOn(e, targetAt(ev.absoluteX, ev.absoluteY)))
+      .onFinalize(() => {
+        setDrag(null);
+        setHover(null);
+        delete targetRects.current.__up;
+        delete targetRefs.current.__up;
+      });
+  const draggable = (e: DocEntry, node: React.ReactElement) =>
+    current && !selected ? (
+      <GestureDetector key={e.uri} gesture={dragGesture(e)}>
+        {node}
+      </GestureDetector>
+    ) : (
+      node
+    );
 
   const doDelete = (e: DocEntry) => {
     confirm('מחיקת קובץ', `למחוק את "${e.name}" מהטלפון? אי אפשר לבטל את זה.`, 'מחק', async () => {
@@ -565,11 +708,17 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     const sel = selected?.has(e.uri);
     const t = e.isDir ? null : typeOf(e.mime);
     return (
-      <TouchableOpacity
+      <View
         key={e.uri}
-        style={[styles.row, sel && styles.rowSel]}
+        ref={(v) => {
+          if (e.isDir) targetRefs.current[e.uri] = v;
+        }}
+        collapsable={false}
+      >
+      <TouchableOpacity
+        style={[styles.row, sel && styles.rowSel, hover === e.uri && styles.dropHover, drag?.e.uri === e.uri && styles.dragSource]}
         onPress={() => openEntry(e)}
-        onLongPress={() => openMenu(e)}
+        onLongPress={current ? undefined : () => openMenu(e)}
         delayLongPress={300}
       >
         {selected && !e.isDir ? <View style={[styles.check, sel && styles.checkOn]}>{sel ? <Text style={styles.checkMark}>✓</Text> : null}</View> : null}
@@ -590,17 +739,24 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
           </TouchableOpacity>
         ) : null}
       </TouchableOpacity>
+      </View>
     );
   };
 
   const tile = (e: DocEntry) => {
     const sel = selected?.has(e.uri);
     return (
-      <TouchableOpacity
+      <View
         key={e.uri}
-        style={[styles.tile, { width: cell }, sel && styles.rowSel]}
+        ref={(v) => {
+          if (e.isDir) targetRefs.current[e.uri] = v;
+        }}
+        collapsable={false}
+      >
+      <TouchableOpacity
+        style={[styles.tile, { width: cell }, sel && styles.rowSel, hover === e.uri && styles.dropHover, drag?.e.uri === e.uri && styles.dragSource]}
         onPress={() => openEntry(e)}
-        onLongPress={() => openMenu(e)}
+        onLongPress={current ? undefined : () => openMenu(e)}
         delayLongPress={300}
       >
         <Thumb e={e} size={cell - 12} styles={styles} />
@@ -613,12 +769,22 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         <Text style={styles.tileName} numberOfLines={2}>
           {e.name}
         </Text>
+        {!e.isDir && !selected ? (
+          <TouchableOpacity onPress={() => openMenu(e)} hitSlop={10} style={styles.tileMore}>
+            <Text style={styles.moreText}>⋮</Text>
+          </TouchableOpacity>
+        ) : null}
       </TouchableOpacity>
+      </View>
     );
   };
 
   const items = (list: DocEntry[]) =>
-    view === 'grid' ? <View style={styles.grid}>{list.map(tile)}</View> : <View>{list.map(row)}</View>;
+    view === 'grid' ? (
+      <View style={styles.grid}>{list.map((e) => (e.isDir ? tile(e) : draggable(e, tile(e))))}</View>
+    ) : (
+      <View>{list.map((e) => (e.isDir ? row(e) : draggable(e, row(e))))}</View>
+    );
 
   const filterBar = (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll} keyboardShouldPersistTaps="handled">
@@ -651,6 +817,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       <TouchableOpacity style={styles.selectBtn} onPress={shareSelected}>
         <Text style={styles.selectBtnText}>📤 שתף</Text>
       </TouchableOpacity>
+      {current ? (
+        <TouchableOpacity
+          style={styles.selectBtn}
+          onPress={() => selected.size && openMoveTo(entries.filter((e) => selected.has(e.uri)))}
+        >
+          <Text style={styles.selectBtnText}>📂 העבר</Text>
+        </TouchableOpacity>
+      ) : null}
       <TouchableOpacity style={styles.selectBtn} onPress={deleteSelected}>
         <Text style={[styles.selectBtnText, styles.danger]}>🗑️ מחק</Text>
       </TouchableOpacity>
@@ -690,7 +864,39 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
               closeMenu();
             }}
           />
+          {current ? <MenuItem styles={styles} label="📂  העבר אל…" onPress={() => openMoveTo([menu])} /> : null}
+          {menu.mime === 'application/pdf' ? (
+            <MenuItem styles={styles} label="🔄  סובב עמודים" onPress={() => setPanel('rotate')} />
+          ) : null}
           <MenuItem styles={styles} label="🗑️  מחיקה" danger onPress={() => doDelete(menu)} />
+        </>
+      ) : null}
+
+      {menu && panel === 'rotate' ? (
+        <>
+          <Text style={styles.popupHint}>כל העמודים בקובץ יסתובבו.</Text>
+          {(
+            [
+              [90, '↻  90° ימינה'],
+              [180, '🔃  180° (דף הפוך)'],
+              [270, '↺  90° שמאלה'],
+            ] as [number, string][]
+          ).map(([deg, label]) => (
+            <MenuItem
+              key={deg}
+              styles={styles}
+              label={label}
+              onPress={async () => {
+                const e = menu;
+                closeMenu();
+                setScanBusy(true);
+                const ok = await GeoAlarm.rotatePdf(e.uri, deg);
+                setScanBusy(false);
+                if (!ok) Alert.alert('סיבוב', 'לא הצלחתי לסובב את הקובץ.');
+                refresh();
+              }}
+            />
+          ))}
         </>
       ) : null}
 
@@ -748,6 +954,79 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     </PopupShell>
   );
 
+  const moveFolder = movePath[movePath.length - 1];
+  const moveToPopup = (
+    <PopupShell
+      visible={!!moveItems}
+      title={moveItems && moveItems.length > 1 ? `העברת ${moveItems.length} קבצים` : `העברת "${moveItems?.[0]?.name ?? ''}"`}
+      onClose={() => setMoveItems(null)}
+      yellow={false}
+    >
+      {movePath.length ? (
+        <TouchableOpacity onPress={() => setMovePath(movePath.slice(0, -1))} style={styles.back}>
+          <Text style={styles.backText}>› {movePath.length > 1 ? movePath[movePath.length - 2].name : 'כל התיקיות'}</Text>
+        </TouchableOpacity>
+      ) : null}
+      <Text style={styles.section}>{moveFolder ? `📂 ${moveFolder.name}` : 'בחר תיקייה'}</Text>
+      {!moveFolder
+        ? folders.map((f) => (
+            <MenuItem key={f.uri} styles={styles} label={`📁  ${f.name}`} onPress={() => setMovePath([f])} />
+          ))
+        : moveDirs === null
+          ? <ActivityIndicator style={styles.spinner} />
+          : moveDirs.map((d) => (
+              <MenuItem
+                key={d.uri}
+                styles={styles}
+                label={`📁  ${d.name}  ‹`}
+                onPress={() => setMovePath([...movePath, { uri: d.uri, name: d.name }])}
+              />
+            ))}
+      {moveFolder && moveDirs && moveDirs.length === 0 ? <Text style={styles.popupHint}>אין כאן תת-תיקיות.</Text> : null}
+      {moveFolder ? (
+        <TouchableOpacity
+          style={[styles.actionBtn, styles.actionPrimary, { marginTop: 12 }]}
+          onPress={() => moveItems && moveTo(moveItems, moveFolder)}
+        >
+          <Text style={styles.actionPrimaryText}>📥 העבר לכאן</Text>
+        </TouchableOpacity>
+      ) : null}
+    </PopupShell>
+  );
+
+  const qualityPopup = (
+    <PopupShell visible={qualityPick} title="איכות סריקה" onClose={() => setQualityPick(false)} yellow={false}>
+      {(Object.keys(QUALITY_LABEL) as ScanQuality[]).map((q) => (
+        <MenuItem
+          key={q}
+          styles={styles}
+          label={`${quality === q ? '●' : '○'}  ${QUALITY_LABEL[q]}`}
+          onPress={() => {
+            setQuality(q);
+            saveScanQuality(q);
+            setQualityPick(false);
+          }}
+        />
+      ))}
+      <Text style={styles.popupHint}>"מקורי" שומר את ה-PDF של הסורק בלי הניקוי שלי.</Text>
+    </PopupShell>
+  );
+
+  const qualityLine = (
+    <TouchableOpacity onPress={() => setQualityPick(true)} hitSlop={6}>
+      <Text style={styles.popupHint}>📷 איכות סריקה: {QUALITY_LABEL[quality]} ▾</Text>
+    </TouchableOpacity>
+  );
+
+  const ghost = drag ? (
+    <View pointerEvents="none" style={[styles.ghost, { left: 24, top: drag.y - rootPos.current.y - 30 }]}>
+      <Text style={styles.ghostText} numberOfLines={1}>
+        {docIcon(drag.e.mime)} {drag.e.name}
+      </Text>
+      <Text style={styles.ghostSub}>{hover ? 'שחרר כדי להעביר' : 'גרור אל תיקייה'}</Text>
+    </View>
+  ) : null;
+
   const newFolderPopup = (
     <PopupShell visible={newFolder !== null} title="📁 תיקייה חדשה" onClose={() => setNewFolder(null)} yellow={false}>
       <TextInput
@@ -798,7 +1077,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
               <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
             </TouchableOpacity>
           </View>
-          {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : null}
+          {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : qualityLine}
           <TextInput
             style={styles.input}
             placeholder="🔍 חיפוש בכל התיקיות"
@@ -859,14 +1138,32 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         {selectBar}
         {menuPopup}
         {scanPopup}
+        {qualityPopup}
       </View>
     );
   }
 
   // ---------- browsing a folder ----------
   return (
-    <View style={styles.flex1} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+    <View style={styles.flex1} ref={rootRef} collapsable={false} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+      {drag && path.length > 1 ? (
+        <View
+          ref={(v) => {
+            targetRefs.current.__up = v;
+          }}
+          collapsable={false}
+          onLayout={() =>
+            targetRefs.current.__up?.measureInWindow((x, y, w, h) => {
+              targetRects.current.__up = { x, y, w, h };
+            })
+          }
+          style={[styles.upBar, hover === '__up' && styles.dropHover]}
+        >
+          <Text style={styles.upBarText}>⬆ שחרר כאן להעברה ל"{path[path.length - 2].name}"</Text>
+        </View>
+      ) : null}
       <FlatList
+        scrollEnabled={!drag}
         data={[0]}
         keyExtractor={() => 'x'}
         contentContainerStyle={styles.content}
@@ -897,7 +1194,10 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
                 </TouchableOpacity>
               ) : null}
             </View>
-            {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : null}
+            {scanBusy ? <Text style={styles.popupHint}>⏳ מעבד את הקובץ…</Text> : qualityLine}
+            {entries.some((e) => !e.isDir) ? (
+              <Text style={styles.popupHint}>טיפ: לחיצה ארוכה על קובץ וגרירה אל תיקייה מעבירה אותו. ⋮ לתפריט.</Text>
+            ) : null}
             <TextInput
               style={styles.input}
               placeholder="🔍 חיפוש בתיקייה"
@@ -930,9 +1230,12 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         )}
       />
       {selectBar}
+      {ghost}
       {menuPopup}
       {scanPopup}
       {newFolderPopup}
+      {moveToPopup}
+      {qualityPopup}
     </View>
   );
 }
@@ -1009,6 +1312,24 @@ const makeStyles = (c: Palette) => ({
   },
   actionText: { fontSize: 14.5, fontWeight: '700' as const, color: c.text },
   actionPrimary: { backgroundColor: c.accent, borderColor: c.accent },
+  dropHover: { backgroundColor: c.accentSoft, borderColor: c.accent, borderWidth: 2 },
+  dragSource: { opacity: 0.35 },
+  tileMore: { position: 'absolute' as const, top: 4, left: 4, padding: 4 },
+  ghost: {
+    position: 'absolute' as const,
+    right: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: c.card,
+    borderWidth: 2,
+    borderColor: c.accent,
+    elevation: 8,
+  },
+  ghostText: { fontSize: 15, fontWeight: '700' as const, color: c.text },
+  ghostSub: { fontSize: 12, color: c.muted, marginTop: 2 },
+  upBar: { position: 'absolute' as const, top: 8, left: 12, right: 12, zIndex: 10, elevation: 10, padding: 18, borderRadius: 14, borderWidth: 2, borderStyle: 'dashed' as const, borderColor: c.accent, backgroundColor: c.subtle },
+  upBarText: { color: c.text, fontWeight: '700' as const, textAlign: 'center' as const },
   popupHint: { fontSize: 12.5, color: c.muted, marginTop: 10, lineHeight: 18 },
   actionPrimaryText: { fontSize: 15, fontWeight: '800' as const, color: c.onAccent },
   input: {

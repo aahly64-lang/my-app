@@ -74,6 +74,10 @@ import {
   saveAccent,
   loadJournals,
   saveJournals,
+  loadTaskLists,
+  saveTaskLists,
+  loadTaskTemplates,
+  saveTaskTemplates,
   loadTimer,
   localDateString,
   markSetupSeen,
@@ -884,6 +888,8 @@ function AppInner({
         themeMode,
         accent,
         journals: await loadJournals(),
+        taskLists: await loadTaskLists(),
+        taskTemplates: await loadTaskTemplates(),
       });
     } catch {
       Alert.alert('הגיבוי נכשל', 'לא הצלחתי ליצור את קובץ הגיבוי.');
@@ -920,6 +926,8 @@ function AppInner({
         if (data.themeMode) setThemeMode(data.themeMode as ThemeMode);
         if (data.accent) setAccent(data.accent);
         if (data.journals) await saveJournals(data.journals);
+        if (data.taskLists) await saveTaskLists(data.taskLists);
+        if (data.taskTemplates) await saveTaskTemplates(data.taskTemplates);
         cancelRing(TIMER_RING_ID);
         setTimer((t) => ({ ...t, endAt: null, pausedRemainingSec: null, notificationId: null }));
         await persistAreas(data.areas, data.areas.map((a) => a.id));

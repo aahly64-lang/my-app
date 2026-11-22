@@ -26,6 +26,47 @@ object DocumentsHelper {
     else DocumentsContract.getTreeDocumentId(uri)
   }
 
+  /**
+   * Moves a file or folder into another folder. Tries a real move first (same storage); otherwise copies the
+   * file and deletes the original. Returns the new uri, or null.
+   */
+  fun move(ctx: Context, srcStr: String, srcParentStr: String, destStr: String): String? {
+    val src = Uri.parse(srcStr)
+    val srcParentTree = Uri.parse(srcParentStr)
+    val destTree = Uri.parse(destStr)
+    val srcParent = DocumentsContract.buildDocumentUriUsingTree(srcParentTree, rootDocId(ctx, srcParentTree))
+    val dest = DocumentsContract.buildDocumentUriUsingTree(destTree, rootDocId(ctx, destTree))
+    try {
+      val moved = DocumentsContract.moveDocument(ctx.contentResolver, src, srcParent, dest)
+      if (moved != null) return moved.toString()
+    } catch (e: Exception) {
+      // fall through to copy + delete
+    }
+    return try {
+      var name = "file"
+      var mime = "application/octet-stream"
+      ctx.contentResolver.query(
+        src,
+        arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
+        null, null, null
+      )?.use { c ->
+        if (c.moveToFirst()) {
+          name = c.getString(0) ?: name
+          mime = c.getString(1) ?: mime
+        }
+      }
+      if (mime == DocumentsContract.Document.MIME_TYPE_DIR) return null
+      val created = DocumentsContract.createDocument(ctx.contentResolver, dest, mime, name) ?: return null
+      ctx.contentResolver.openOutputStream(created)?.use { out ->
+        ctx.contentResolver.openInputStream(src)?.use { it.copyTo(out) }
+      }
+      DocumentsContract.deleteDocument(ctx.contentResolver, src)
+      created.toString()
+    } catch (e: Exception) {
+      null
+    }
+  }
+
   /** Creates a sub-folder; returns its uri (usable like any folder uri), or null. */
   fun createFolder(ctx: Context, parentUri: String, name: String): String? {
     return try {

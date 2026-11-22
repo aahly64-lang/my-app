@@ -51,7 +51,10 @@ type GeoAlarmNative = {
   shareDocuments(uris: string[], mimes: string[]): boolean;
   copyIntoFolder(src: string, treeUri: string, name: string, mime: string): Promise<string | null>;
   createFolder(parentUri: string, name: string): Promise<string | null>;
-  scanDocument(): Promise<{ uri: string; pages: number } | null>;
+  scanDocument(quality: string): Promise<{ uri: string; pages: number } | null>;
+  moveDocument(src: string, srcParent: string, destFolder: string): Promise<string | null>;
+  rotatePdf(uri: string, degrees: number): Promise<boolean>;
+  pickContact(): Promise<{ name: string; phone: string } | null>;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
   stopAlarm(): void;
   canUseFullScreenIntent(): boolean;
@@ -144,9 +147,30 @@ export const GeoAlarm = {
       return null;
     }
   },
-  scanDocument: async (): Promise<{ uri: string; pages: number } | null> => {
+  scanDocument: async (quality = 'normal'): Promise<{ uri: string; pages: number } | null> => {
     if (!native) throw new Error('לא זמין במכשיר הזה');
-    return native.scanDocument();
+    return native.scanDocument(quality);
+  },
+  moveDocument: async (src: string, srcParent: string, destFolder: string): Promise<string | null> => {
+    try {
+      return native ? await native.moveDocument(src, srcParent, destFolder) : null;
+    } catch {
+      return null;
+    }
+  },
+  pickContact: async (): Promise<{ name: string; phone: string } | null> => {
+    try {
+      return native ? await native.pickContact() : null;
+    } catch {
+      return null;
+    }
+  },
+  rotatePdf: async (uri: string, degrees: number): Promise<boolean> => {
+    try {
+      return native ? await native.rotatePdf(uri, degrees) : false;
+    } catch {
+      return false;
+    }
   },
   getSoundTitle: (uri: string | null) => safe(() => native!.getSoundTitle(uri), 'ברירת מחדל'),
   pickSound: async (current: string | null, title: string) => {

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Modal, Text, TextStyle, TouchableOpacity, View } from 'react-native';
+import { Text, TextStyle, TouchableOpacity, View } from 'react-native';
 import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
 import { Palette, fontFor, useTheme, useThemedStyles } from './theme';
 
@@ -219,12 +219,6 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
   const ref = useRef<RichEditor>(null);
   const [pick, setPick] = useState<'size' | 'color' | 'hilite' | null>(null);
 
-  // Returning from the picker: give the editor its focus back, then format the selection.
-  const apply = (fn: () => void) => {
-    ref.current?.focusContentEditor();
-    setTimeout(fn, 80);
-  };
-
   const glyph = (t: string, extra?: TextStyle) => ({ tintColor }: { tintColor?: string }) => (
     <Text style={[styles.tool, { color: tintColor }, extra]}>{t}</Text>
   );
@@ -248,6 +242,39 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
         }}
         style={styles.editor}
       />
+      {pick ? (
+        <View style={styles.inlinePanel}>
+          {pick === 'size'
+            ? FONT_SIZES.map(([n, label]) => (
+                <TouchableOpacity
+                  key={n}
+                  style={styles.sizeBtn}
+                  onPress={() => {
+                    ref.current?.setFontSize(n);
+                    setPick(null);
+                  }}
+                >
+                  <Text style={[styles.pickText, { fontSize: 14 * (SIZES[String(n)] ?? 1) }]}>{label}</Text>
+                </TouchableOpacity>
+              ))
+            : (pick === 'color' ? TEXT_COLORS : HILITE_COLORS).map((col) => (
+                <TouchableOpacity
+                  key={col}
+                  style={[styles.swatch, { backgroundColor: col === 'transparent' ? c.card : col }]}
+                  onPress={() => {
+                    if (pick === 'color') ref.current?.setForeColor(col);
+                    else ref.current?.setHiliteColor(col);
+                    setPick(null);
+                  }}
+                >
+                  {col === 'transparent' ? <Text style={styles.pickText}>✕</Text> : null}
+                </TouchableOpacity>
+              ))}
+          <TouchableOpacity onPress={() => setPick(null)} hitSlop={8} style={styles.panelClose}>
+            <Text style={styles.pickText}>סגור</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <RichToolbar
         editor={ref}
         style={styles.toolbar}
@@ -288,54 +315,11 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
           [actions.undo]: glyph('↶'),
           [actions.redo]: glyph('↷'),
         }}
-        fontSizePick={() => setPick('size')}
-        colorPick={() => setPick('color')}
-        hilitePick={() => setPick('hilite')}
+        fontSizePick={() => setPick(pick === 'size' ? null : 'size')}
+        colorPick={() => setPick(pick === 'color' ? null : 'color')}
+        hilitePick={() => setPick(pick === 'hilite' ? null : 'hilite')}
       />
 
-      <Modal visible={pick !== null} transparent animationType="fade" onRequestClose={() => setPick(null)}>
-        <TouchableOpacity style={styles.pickBackdrop} activeOpacity={1} onPress={() => setPick(null)}>
-          <View style={styles.pickBox}>
-            {pick === 'size' ? (
-              <>
-                <Text style={styles.pickTitle}>גודל טקסט</Text>
-                {FONT_SIZES.map(([n, label]) => (
-                  <TouchableOpacity
-                    key={n}
-                    style={styles.pickRow}
-                    onPress={() => {
-                      setPick(null);
-                      apply(() => ref.current?.setFontSize(n));
-                    }}
-                  >
-                    <Text style={[styles.pickText, { fontSize: 14 * (SIZES[String(n)] ?? 1) }]}>{label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </>
-            ) : null}
-            {pick === 'color' || pick === 'hilite' ? (
-              <>
-                <Text style={styles.pickTitle}>{pick === 'color' ? 'צבע טקסט' : 'צבע מרקר'}</Text>
-                <View style={styles.swatches}>
-                  {(pick === 'color' ? TEXT_COLORS : HILITE_COLORS).map((col) => (
-                    <TouchableOpacity
-                      key={col}
-                      style={[styles.swatch, { backgroundColor: col === 'transparent' ? c.card : col }]}
-                      onPress={() => {
-                        const which = pick;
-                        setPick(null);
-                        apply(() => (which === 'color' ? ref.current?.setForeColor(col) : ref.current?.setHiliteColor(col)));
-                      }}
-                    >
-                      {col === 'transparent' ? <Text style={styles.pickText}>✕</Text> : null}
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </>
-            ) : null}
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 }
@@ -358,6 +342,18 @@ const makeStyles = (c: Palette) => ({
   tool: { fontSize: 17, minWidth: 22, textAlign: 'center' as const },
   toolOn: { backgroundColor: c.accent, borderRadius: 8 },
   editor: { minHeight: 170 },
+  inlinePanel: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    padding: 10,
+    backgroundColor: c.card,
+    borderTopWidth: 1,
+    borderTopColor: c.border,
+  },
+  sizeBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: c.subtle },
+  panelClose: { marginStart: 'auto' as const, paddingHorizontal: 8 },
   pickBackdrop: { flex: 1, backgroundColor: c.overlay, alignItems: 'center' as const, justifyContent: 'center' as const },
   pickBox: { width: 280, borderRadius: 18, padding: 16, backgroundColor: c.card },
   pickTitle: { fontSize: 16, fontWeight: '800' as const, color: c.text, marginBottom: 10 },
@@ -365,9 +361,9 @@ const makeStyles = (c: Palette) => ({
   pickText: { color: c.text, fontWeight: '600' as const },
   swatches: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 10 },
   swatch: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1.5,
     borderColor: c.border,
     alignItems: 'center' as const,

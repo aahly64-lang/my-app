@@ -17,6 +17,7 @@
     "expo-document-picker": "~13.0.3",
     "expo-file-system": "~18.0.12",
     "expo-font": "~13.0.4",
+    "expo-image-picker": "~16.0.6",
     "expo-local-authentication": "~15.0.2",
     "expo-localization": "~16.0.1",
     "expo-location": "~18.0.0",

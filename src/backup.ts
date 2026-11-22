@@ -14,6 +14,8 @@ import {
   localDateString,
   DocMeta,
   Journal,
+  TaskList,
+  TaskTemplate,
 } from './storage';
 
 export interface BackupData {
@@ -29,6 +31,8 @@ export interface BackupData {
   themeMode?: string;
   accent?: string;
   journals?: Journal[];
+  taskLists?: TaskList[];
+  taskTemplates?: TaskTemplate[];
 }
 
 const BACKUP_APP_ID = 'avi-personal-board';
@@ -79,6 +83,8 @@ export async function pickBackup(): Promise<BackupData | null> {
       themeMode: typeof parsed.themeMode === 'string' ? parsed.themeMode : undefined,
       accent: typeof parsed.accent === 'string' ? parsed.accent : undefined,
       journals: Array.isArray(parsed.journals) ? parsed.journals : undefined,
+      taskLists: Array.isArray(parsed.taskLists) ? parsed.taskLists : undefined,
+      taskTemplates: Array.isArray(parsed.taskTemplates) ? parsed.taskTemplates : undefined,
     };
   } catch {
     Alert.alert('השחזור נכשל', 'לא הצלחתי לקרוא את קובץ הגיבוי.');
