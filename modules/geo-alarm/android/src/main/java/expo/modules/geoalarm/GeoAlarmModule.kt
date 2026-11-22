@@ -263,10 +263,7 @@ class GeoAlarmModule : Module() {
         val options = com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder()
           .setGalleryImportAllowed(true)
           .setPageLimit(30)
-          .setResultFormats(
-            com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG,
-            com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF
-          )
+          .setResultFormats(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
           .setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL)
           .build()
         com.google.mlkit.vision.documentscanner.GmsDocumentScanning.getClient(options)
@@ -322,10 +319,10 @@ class GeoAlarmModule : Module() {
         }
         val result = com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult.fromActivityResultIntent(payload.data)
         val pdf = result?.pdf
-        val pages = result?.pages?.map { it.imageUri } ?: emptyList()
+        val pages = result?.pages ?: emptyList()
         // Clean every page the same way, off the main thread; fall back to the scanner's PDF.
         Thread {
-          val enhanced = if (scanQuality == "original") null else try { ScanEnhancer.enhance(context, pages, scanQuality) } catch (e: Throwable) { null }
+          val enhanced = if (scanQuality == "original" || pdf == null) null else try { ScanEnhancer.enhance(context, pdf.uri, scanQuality) } catch (e: Throwable) { null }
           val uri = enhanced ?: pdf?.uri?.toString()
           val count = if (pages.isNotEmpty()) pages.size else (pdf?.pageCount ?: 0)
           promise.resolve(

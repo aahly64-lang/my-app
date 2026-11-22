@@ -2,7 +2,6 @@ package expo.modules.geoalarm
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
@@ -12,7 +11,6 @@ import android.graphics.Paint
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -31,24 +29,48 @@ object ScanEnhancer {
     else -> 1700 to 72
   }
 
-  /** Returns a file uri of the new PDF, or null if anything failed (the caller keeps the original). */
-  fun enhance(ctx: Context, pages: List<Uri>, quality: String): String? {
-    if (pages.isEmpty()) return null
+  /**
+   * Builds the cleaned PDF from the scanner's own PDF (rendered page by page), so every page keeps exactly
+   * the orientation the scanner showed (and any rotation done there). Returns a file uri, or null.
+   */
+  fun enhance(ctx: Context, pdfUri: Uri, quality: String): String? {
     val (maxSide, q) = preset(quality)
+    val tmp = File(ctx.cacheDir, "src-${System.currentTimeMillis()}.pdf")
     return try {
+      ctx.contentResolver.openInputStream(pdfUri)?.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } } ?: return null
       val jpegs = ArrayList<Triple<ByteArray, Int, Int>>()
-      for (uri in pages) {
-        val src = decode(ctx, uri, maxSide) ?: return null
-        val clean = levels(src)
-        if (clean !== src) src.recycle()
-        jpegs.add(Triple(toJpeg(clean, q), clean.width, clean.height))
-        clean.recycle()
+      val pfd = ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY)
+      val renderer = PdfRenderer(pfd)
+      try {
+        for (i in 0 until renderer.pageCount) {
+          val page = renderer.openPage(i)
+          try {
+            val scale = maxSide.toFloat() / maxOf(page.width, page.height)
+            val w = (page.width * scale).toInt().coerceAtLeast(1)
+            val h = (page.height * scale).toInt().coerceAtLeast(1)
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(Color.WHITE)
+            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+            val clean = levels(bmp)
+            if (clean !== bmp) bmp.recycle()
+            jpegs.add(Triple(toJpeg(clean, q), clean.width, clean.height))
+            clean.recycle()
+          } finally {
+            page.close()
+          }
+        }
+      } finally {
+        renderer.close()
+        pfd.close()
       }
+      if (jpegs.isEmpty()) return null
       val out = File(ctx.cacheDir, "scan-${System.currentTimeMillis()}.pdf")
       FileOutputStream(out).use { writePdf(it, jpegs) }
       Uri.fromFile(out).toString()
     } catch (e: Throwable) {
       null
+    } finally {
+      tmp.delete()
     }
   }
 
@@ -160,45 +182,6 @@ object ScanEnhancer {
     val bos = ByteArrayOutputStream()
     b.compress(Bitmap.CompressFormat.JPEG, q, bos)
     return bos.toByteArray()
-  }
-
-  private fun orientation(ctx: Context, uri: Uri): Int = try {
-    ctx.contentResolver.openInputStream(uri)?.use {
-      when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-        ExifInterface.ORIENTATION_ROTATE_90 -> 90
-        ExifInterface.ORIENTATION_ROTATE_180 -> 180
-        ExifInterface.ORIENTATION_ROTATE_270 -> 270
-        else -> 0
-      }
-    } ?: 0
-  } catch (e: Throwable) {
-    0
-  }
-
-  private fun decode(ctx: Context, uri: Uri, maxSide: Int): Bitmap? {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
-    val opts = BitmapFactory.Options().apply {
-      inSampleSize = sample
-      inPreferredConfig = Bitmap.Config.ARGB_8888
-    }
-    var bmp = ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return null
-    val side = maxOf(bmp.width, bmp.height)
-    val scale = if (side > maxSide) maxSide.toFloat() / side else 1f
-    val deg = orientation(ctx, uri)
-    if (scale < 1f || deg != 0) {
-      val m = Matrix().apply {
-        postScale(scale, scale)
-        if (deg != 0) postRotate(deg.toFloat())
-      }
-      val t = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
-      if (t !== bmp) bmp.recycle()
-      bmp = t
-    }
-    return bmp
   }
 
   /** Levels stretch by luminance percentiles (1% dark, 92% light = the paper). */

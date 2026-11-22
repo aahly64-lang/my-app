@@ -412,3 +412,8 @@ export const SCAN_QUALITY_KEY = '@avi_scan_quality_v1';
 export type ScanQuality = 'small' | 'normal' | 'high' | 'original';
 export const loadScanQuality = async () => ((await readJson<string>(SCAN_QUALITY_KEY)) as ScanQuality | null) ?? 'normal';
 export const saveScanQuality = (q: ScanQuality) => writeJson(SCAN_QUALITY_KEY, q);
+
+export const DOC_ORDER_KEY = '@avi_doc_order_v1';
+/** Manual order of files per folder uri (file names). */
+export const loadDocOrder = async () => (await readJson<Record<string, string[]>>(DOC_ORDER_KEY)) ?? {};
+export const saveDocOrder = (o: Record<string, string[]>) => writeJson(DOC_ORDER_KEY, o);

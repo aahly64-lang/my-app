@@ -213,7 +213,17 @@ const FONT_SIZES: [1 | 2 | 3 | 4 | 5 | 6 | 7, string][] = [
   [6, 'ענק'],
 ];
 
-export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onChange: (html: string) => void }) {
+export function NoteEditor({
+  initialHtml,
+  onChange,
+  fill,
+  trailing,
+}: {
+  initialHtml: string;
+  onChange: (html: string) => void;
+  fill?: boolean; // full-screen: the text scrolls inside, the toolbar stays put
+  trailing?: React.ReactNode; // extra button at the end of the toolbar row
+}) {
   const c = useTheme();
   const styles = useThemedStyles(makeStyles);
   const ref = useRef<RichEditor>(null);
@@ -224,23 +234,23 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
   );
 
   return (
-    <View style={styles.editorWrap}>
+    <View style={fill ? styles.fillWrap : styles.editorWrap}>
       <RichEditor
         ref={ref}
         initialContentHTML={initialHtml}
         onChange={onChange}
         placeholder="כתוב כאן..."
-        initialHeight={170}
-        useContainer
+        initialHeight={fill ? undefined : 170}
+        useContainer={!fill}
         editorStyle={{
           backgroundColor: c.noteInput,
           color: c.noteText,
           placeholderColor: c.muted,
           caretColor: c.text,
-          contentCSSText: 'font-size: 16px; direction: rtl; text-align: right; padding: 4px 8px; min-height: 160px;',
+          contentCSSText: `font-size: 17px; direction: rtl; text-align: right; padding: 8px 12px; min-height: ${fill ? '90%' : '160px'};`,
           initialCSSText: 'body { direction: rtl; } ol.x-todo { padding-right: 24px; }',
         }}
-        style={styles.editor}
+        style={fill ? styles.fillEditor : styles.editor}
       />
       {pick ? (
         <View style={styles.inlinePanel}>
@@ -275,50 +285,55 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
           </TouchableOpacity>
         </View>
       ) : null}
-      <RichToolbar
-        editor={ref}
-        style={styles.toolbar}
-        iconTint={c.text}
-        selectedIconTint={c.onAccent}
-        selectedButtonStyle={styles.toolOn}
-        actions={[
-          actions.setBold,
-          actions.setItalic,
-          actions.setUnderline,
-          actions.setStrikethrough,
-          'fontSizePick',
-          'colorPick',
-          'hilitePick',
-          actions.insertBulletsList,
-          actions.insertOrderedList,
-          actions.checkboxList,
-          actions.alignRight,
-          actions.alignCenter,
-          actions.alignLeft,
-          actions.undo,
-          actions.redo,
-        ]}
-        iconMap={{
-          [actions.setBold]: glyph('B', { fontWeight: '900' }),
-          [actions.setItalic]: glyph('I', { fontStyle: 'italic', fontWeight: '700' }),
-          [actions.setUnderline]: glyph('U', { textDecorationLine: 'underline', fontWeight: '700' }),
-          [actions.setStrikethrough]: glyph('S', { textDecorationLine: 'line-through', fontWeight: '700' }),
-          fontSizePick: glyph('Aא'),
-          colorPick: glyph('🎨'),
-          hilitePick: glyph('🖍️'),
-          [actions.insertBulletsList]: glyph('•≡'),
-          [actions.insertOrderedList]: glyph('1≡'),
-          [actions.checkboxList]: glyph('☑'),
-          [actions.alignRight]: glyph('⇥'),
-          [actions.alignCenter]: glyph('↔'),
-          [actions.alignLeft]: glyph('⇤'),
-          [actions.undo]: glyph('↶'),
-          [actions.redo]: glyph('↷'),
-        }}
-        fontSizePick={() => setPick(pick === 'size' ? null : 'size')}
-        colorPick={() => setPick(pick === 'color' ? null : 'color')}
-        hilitePick={() => setPick(pick === 'hilite' ? null : 'hilite')}
-      />
+      <View style={styles.toolRow}>
+        <View style={styles.flex1}>
+        <RichToolbar
+          editor={ref}
+          style={styles.toolbar}
+          iconTint={c.text}
+          selectedIconTint={c.onAccent}
+          selectedButtonStyle={styles.toolOn}
+          actions={[
+            actions.setBold,
+            actions.setItalic,
+            actions.setUnderline,
+            actions.setStrikethrough,
+            'fontSizePick',
+            'colorPick',
+            'hilitePick',
+            actions.insertBulletsList,
+            actions.insertOrderedList,
+            actions.checkboxList,
+            actions.alignRight,
+            actions.alignCenter,
+            actions.alignLeft,
+            actions.undo,
+            actions.redo,
+          ]}
+          iconMap={{
+            [actions.setBold]: glyph('B', { fontWeight: '900' }),
+            [actions.setItalic]: glyph('I', { fontStyle: 'italic', fontWeight: '700' }),
+            [actions.setUnderline]: glyph('U', { textDecorationLine: 'underline', fontWeight: '700' }),
+            [actions.setStrikethrough]: glyph('S', { textDecorationLine: 'line-through', fontWeight: '700' }),
+            fontSizePick: glyph('Aא'),
+            colorPick: glyph('🎨'),
+            hilitePick: glyph('🖍️'),
+            [actions.insertBulletsList]: glyph('•≡'),
+            [actions.insertOrderedList]: glyph('1≡'),
+            [actions.checkboxList]: glyph('☑'),
+            [actions.alignRight]: glyph('⇥'),
+            [actions.alignCenter]: glyph('↔'),
+            [actions.alignLeft]: glyph('⇤'),
+            [actions.undo]: glyph('↶'),
+            [actions.redo]: glyph('↷'),
+          }}
+          fontSizePick={() => setPick(pick === 'size' ? null : 'size')}
+          colorPick={() => setPick(pick === 'color' ? null : 'color')}
+          hilitePick={() => setPick(pick === 'hilite' ? null : 'hilite')}
+        />
+        </View>
+        {trailing}
+      </View>
 
     </View>
   );
@@ -337,6 +352,10 @@ const makeStyles = (c: Palette) => ({
   },
   colorDotOn: { borderWidth: 3, borderColor: c.accent },
   colorCheck: { fontSize: 14, fontWeight: '900' as const, color: c.text },
+  fillWrap: { flex: 1, backgroundColor: c.noteInput },
+  fillEditor: { flex: 1 },
+  toolRow: { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: c.subtle },
+  flex1: { flex: 1 },
   editorWrap: { borderRadius: 12, overflow: 'hidden' as const, borderWidth: 1, borderColor: c.border, marginBottom: 10 },
   toolbar: { backgroundColor: c.subtle, height: 44, borderTopWidth: 1, borderTopColor: c.border },
   tool: { fontSize: 17, minWidth: 22, textAlign: 'center' as const },

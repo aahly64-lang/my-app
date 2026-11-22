@@ -32,9 +32,17 @@ object DocumentsHelper {
    */
   fun move(ctx: Context, srcStr: String, srcParentStr: String, destStr: String): String? {
     val src = Uri.parse(srcStr)
-    val srcParentTree = Uri.parse(srcParentStr)
     val destTree = Uri.parse(destStr)
-    val srcParent = DocumentsContract.buildDocumentUriUsingTree(srcParentTree, rootDocId(ctx, srcParentTree))
+    // Parent unknown (e.g. a file from "recent"): derive it from the document id ("primary:A/B/file.pdf" -> "primary:A/B").
+    val srcParent = if (srcParentStr.isNotEmpty()) {
+      val t = Uri.parse(srcParentStr)
+      DocumentsContract.buildDocumentUriUsingTree(t, rootDocId(ctx, t))
+    } else {
+      val id = DocumentsContract.getDocumentId(src)
+      val cut = id.lastIndexOf('/')
+      val parentId = if (cut > 0) id.substring(0, cut) else DocumentsContract.getTreeDocumentId(src)
+      DocumentsContract.buildDocumentUriUsingTree(src, parentId)
+    }
     val dest = DocumentsContract.buildDocumentUriUsingTree(destTree, rootDocId(ctx, destTree))
     try {
       val moved = DocumentsContract.moveDocument(ctx.contentResolver, src, srcParent, dest)

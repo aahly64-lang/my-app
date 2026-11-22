@@ -32,7 +32,8 @@ import { exportBackup, pickBackup } from './src/backup';
 import { useAppStyles } from './src/appStyles';
 import { ThemeContext, ThemeMode, paletteFor, useTheme } from './src/theme';
 import StopwatchCard from './src/Stopwatch';
-import { NoteColorPicker, NoteEditor, RichText, htmlToPlain, noteBg, plainToHtml } from './src/richNote';
+import { RichText, htmlToPlain, noteBg, plainToHtml } from './src/richNote';
+import NoteScreen from './src/NoteScreen';
 import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './src/ui';
 import { DAY_LETTERS, daysSummary, displayYMD, endOfDay, hhmm, parseHHMM, parseYMD, pickTimeWheels } from './src/pickers';
 import {
@@ -1212,92 +1213,68 @@ function AppInner({
       </ScrollView>
       ) : null}
 
-      {/* ---------- popup: new note ---------- */}
-      <PopupShell
+      {/* ---------- note screens (full screen) ---------- */}
+      <NoteScreen
         visible={createVisible}
-        title="פתק חדש"
+        isNew
+        editorKey={`new-${editorKey}`}
+        title={newTitle}
+        onTitle={setNewTitle}
+        initialHtml=""
+        onHtml={(h) => {
+          setNewHtml(h);
+          setNewBody(htmlToPlain(h));
+        }}
+        color={newColor}
+        onColor={setNewColor}
+        reminder={newReminder}
+        onReminder={setNewReminder}
+        onSave={createNote}
         onClose={closeCreate}
-        actions={
-          <TouchableOpacity style={styles.headerSaveBtn} onPress={createNote} hitSlop={8}>
-            <Text style={styles.headerSaveText}>✓ שמור</Text>
-          </TouchableOpacity>
-        }
-      >
-        <TextInput placeholderTextColor={c.muted} style={styles.popupInput} placeholder="כותרת הפתק..." value={newTitle} onChangeText={setNewTitle} />
-        <NoteEditor
-          key={`new-${editorKey}`}
-          initialHtml=""
-          onChange={(h) => {
-            setNewHtml(h);
-            setNewBody(htmlToPlain(h));
-          }}
-        />
-        <Text style={styles.hintText}>צבע הפתק</Text>
-        <NoteColorPicker value={newColor} onChange={setNewColor} />
-        <ReminderEditor value={newReminder} onChange={setNewReminder} />
-        <TouchableOpacity style={styles.darkBtn} onPress={createNote}>
-          <Text style={styles.whiteBtnText}>הדבק לשולחן העבודה</Text>
-        </TouchableOpacity>
-      </PopupShell>
+      />
 
-      {/* ---------- popup: existing note ---------- */}
-      <PopupShell
+      <NoteScreen
         visible={!!selectedNote}
-        title="פרטי פתק"
+        isNew={false}
+        editorKey={`edit-${editorKey}`}
+        title={editTitle}
+        onTitle={setEditTitle}
+        initialHtml={editHtml}
+        onHtml={(h) => {
+          setEditHtml(h);
+          setEditBody(htmlToPlain(h));
+        }}
+        color={editColor}
+        onColor={setEditColor}
+        reminder={editReminder}
+        onReminder={setEditReminder}
+        onSave={saveNote}
         onClose={closeEdit}
-        actions={
-          <>
-            <TouchableOpacity style={styles.headerIconBtn} onPress={() => selectedNote && shareNote(selectedNote)} hitSlop={8}>
-              <Text style={styles.headerIconText}>⤴</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.headerSaveBtn} onPress={saveNote} hitSlop={8}>
-              <Text style={styles.headerSaveText}>✓ שמור</Text>
-            </TouchableOpacity>
-          </>
+        onShare={() => selectedNote && shareNote(selectedNote)}
+        extra={
+          selectedNote ? (
+            <>
+              <TouchableOpacity
+                style={[styles.doneBtn, selectedNote.done && styles.doneBtnOn]}
+                onPress={() => {
+                  toggleDone(selectedNote);
+                  setSelectedNote(null);
+                }}
+              >
+                <Text style={styles.doneBtnText}>{selectedNote.done ? '↩ החזר למטלות פתוחות' : '✓ סמן כבוצע'}</Text>
+              </TouchableOpacity>
+              <View style={styles.actionRow}>
+                <TouchableOpacity style={styles.blueBtnFlex} onPress={() => noteToTask(selectedNote)}>
+                  <Text style={styles.softBtnText}>✅ הפוך למשימה</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.redBtn} onPress={() => deleteNote(selectedNote)}>
+                  <Text style={styles.dangerBtnText}>🗑️ מחק</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : null
         }
-      >
-        <TextInput placeholderTextColor={c.muted} style={styles.popupInput} value={editTitle} onChangeText={setEditTitle} placeholder="כותרת" />
-        {selectedNote ? (
-          <NoteEditor
-            key={`edit-${editorKey}`}
-            initialHtml={editHtml}
-            onChange={(h) => {
-              setEditHtml(h);
-              setEditBody(htmlToPlain(h));
-            }}
-          />
-        ) : null}
-        <Text style={styles.hintText}>צבע הפתק</Text>
-        <NoteColorPicker value={editColor} onChange={setEditColor} />
-        <ReminderEditor value={editReminder} onChange={setEditReminder} />
-        {selectedNote ? (
-          <TouchableOpacity
-            style={[styles.doneBtn, selectedNote.done && styles.doneBtnOn]}
-            onPress={() => {
-              toggleDone(selectedNote);
-              setSelectedNote(null);
-            }}
-          >
-            <Text style={styles.doneBtnText}>{selectedNote.done ? '↩ החזר למטלות פתוחות' : '✓ סמן כבוצע'}</Text>
-          </TouchableOpacity>
-        ) : null}
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.greenBtn} onPress={saveNote}>
-            <Text style={styles.whiteBtnText}>שמור</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.blueBtnFlex} onPress={() => selectedNote && shareNote(selectedNote)}>
-            <Text style={styles.softBtnText}>שתף</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.redBtn} onPress={() => selectedNote && deleteNote(selectedNote)}>
-            <Text style={styles.dangerBtnText}>מחק</Text>
-          </TouchableOpacity>
-        </View>
-        {selectedNote ? (
-          <TouchableOpacity style={styles.toTaskBtn} onPress={() => noteToTask(selectedNote)}>
-            <Text style={styles.linkText}>✅ הפוך למשימה</Text>
-          </TouchableOpacity>
-        ) : null}
-      </PopupShell>
+      />
 
       {/* ---------- popup: area details ---------- */}
       <PopupShell

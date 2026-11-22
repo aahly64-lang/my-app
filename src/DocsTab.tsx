@@ -29,6 +29,8 @@ import {
   loadDocRecent,
   loadDocView,
   loadScanQuality,
+  loadDocOrder,
+  saveDocOrder,
   ScanQuality,
   saveScanQuality,
   loadTasks,
@@ -176,7 +178,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<DocEntry[] | null>(null);
   const [searching, setSearching] = useState(false);
-  const [sortBy, setSortBy] = useState<'name' | 'date'>('name');
+  const [sortBy, setSortBy] = useState<'name' | 'date' | 'manual'>('name');
+  const [order, setOrder] = useState<Record<string, string[]>>({});
   const [filter, setFilter] = useState<TypeFilter>('all');
   const [view, setView] = useState<'list' | 'grid'>('list');
   const [meta, setMeta] = useState<Record<string, DocMeta>>({});
@@ -211,6 +214,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     loadDocRecent().then(setRecent);
     loadDocView().then(setView);
     loadScanQuality().then(setQuality);
+    loadDocOrder().then(setOrder);
     setPath([]);
   }, [dataVersion]);
 
@@ -458,13 +462,13 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   };
 
   const moveTo = async (list: DocEntry[], dest: DocFolder) => {
-    if (!current || busyMove.current) return;
+    if (busyMove.current) return;
     busyMove.current = true;
     const pairs: [string, string][] = [];
     let failed = 0;
     for (const e of list) {
       if (e.uri === dest.uri) continue;
-      const to = await GeoAlarm.moveDocument(e.uri, current.uri, dest.uri);
+      const to = await GeoAlarm.moveDocument(e.uri, current?.uri ?? '', dest.uri);
       if (to) pairs.push([e.uri, to]);
       else failed++;
     }
@@ -472,7 +476,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     busyMove.current = false;
     setSelected(null);
     setMoveItems(null);
-    refresh();
+    if (current) refresh();
+    if (results) setResults(results.filter((r) => !pairs.some(([from]) => from === r.uri)));
     if (failed) Alert.alert('העברה', `${failed} פריטים לא הועברו. ייתכן שאין הרשאת כתיבה.`);
   };
 
@@ -507,15 +512,32 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     for (const [key, r] of Object.entries(targetRects.current)) if (inRect(r, x, y)) return key;
     return null;
   };
+  const reorder = (e: DocEntry, before: DocEntry) => {
+    if (!current) return;
+    const names = shownEntries.filter((x) => !x.isDir).map((x) => x.name).filter((n) => n !== e.name);
+    const at = names.indexOf(before.name);
+    names.splice(at < 0 ? names.length : at, 0, e.name);
+    const next = { ...order, [current.uri]: names };
+    setOrder(next);
+    saveDocOrder(next);
+    setSortBy('manual');
+  };
   const dropOn = (e: DocEntry, key: string | null) => {
-    if (!key || !current || key === e.uri) return;
+    if (!key || key === e.uri) return;
+    if (key.startsWith('root:')) {
+      const f = folders.find((x) => 'root:' + x.uri === key);
+      if (f) moveTo([e], f);
+      return;
+    }
+    if (!current) return;
     if (key === '__up') {
       const parent = path[path.length - 2];
       if (parent) moveTo([e], parent);
       return;
     }
-    const dir = entries.find((x) => x.uri === key && x.isDir);
-    if (dir) moveTo([e], { uri: dir.uri, name: dir.name });
+    const target = entries.find((x) => x.uri === key);
+    if (target?.isDir) moveTo([e], { uri: target.uri, name: target.name });
+    else if (target) reorder(e, target);
   };
   const dragGesture = (e: DocEntry) =>
     Gesture.Pan()
@@ -537,7 +559,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         delete targetRefs.current.__up;
       });
   const draggable = (e: DocEntry, node: React.ReactElement) =>
-    current && !selected ? (
+    !selected ? (
       <GestureDetector key={e.uri} gesture={dragGesture(e)}>
         {node}
       </GestureDetector>
@@ -647,9 +669,15 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     return list.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       if (sortBy === 'date') return b.modified - a.modified;
+      if (sortBy === 'manual' && current) {
+        const o = order[current.uri] ?? [];
+        const ia = o.indexOf(a.name);
+        const ib = o.indexOf(b.name);
+        if (ia !== ib) return (ia < 0 ? 1e9 : ia) - (ib < 0 ? 1e9 : ib);
+      }
       return a.name.localeCompare(b.name, 'he');
     });
-  }, [entries, search, sortBy, filter]);
+  }, [entries, search, sortBy, filter, order, current]);
 
   const shownResults = useMemo(
     () => (results ?? []).filter((e) => passes(filter, e.mime, e.isDir)),
@@ -711,14 +739,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       <View
         key={e.uri}
         ref={(v) => {
-          if (e.isDir) targetRefs.current[e.uri] = v;
+          if (e.isDir || current) targetRefs.current[e.uri] = v;
         }}
         collapsable={false}
       >
       <TouchableOpacity
         style={[styles.row, sel && styles.rowSel, hover === e.uri && styles.dropHover, drag?.e.uri === e.uri && styles.dragSource]}
         onPress={() => openEntry(e)}
-        onLongPress={current ? undefined : () => openMenu(e)}
+        onLongPress={undefined}
         delayLongPress={300}
       >
         {selected && !e.isDir ? <View style={[styles.check, sel && styles.checkOn]}>{sel ? <Text style={styles.checkMark}>✓</Text> : null}</View> : null}
@@ -749,14 +777,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       <View
         key={e.uri}
         ref={(v) => {
-          if (e.isDir) targetRefs.current[e.uri] = v;
+          if (e.isDir || current) targetRefs.current[e.uri] = v;
         }}
         collapsable={false}
       >
       <TouchableOpacity
         style={[styles.tile, { width: cell }, sel && styles.rowSel, hover === e.uri && styles.dropHover, drag?.e.uri === e.uri && styles.dragSource]}
         onPress={() => openEntry(e)}
-        onLongPress={current ? undefined : () => openMenu(e)}
+        onLongPress={undefined}
         delayLongPress={300}
       >
         <Thumb e={e} size={cell - 12} styles={styles} />
@@ -1019,11 +1047,16 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   );
 
   const ghost = drag ? (
-    <View pointerEvents="none" style={[styles.ghost, { left: 24, top: drag.y - rootPos.current.y - 30 }]}>
+    <View
+      pointerEvents="none"
+      style={[styles.ghost, { left: Math.max(4, drag.x - rootPos.current.x - 110), top: drag.y - rootPos.current.y - 70 }]}
+    >
       <Text style={styles.ghostText} numberOfLines={1}>
         {docIcon(drag.e.mime)} {drag.e.name}
       </Text>
-      <Text style={styles.ghostSub}>{hover ? 'שחרר כדי להעביר' : 'גרור אל תיקייה'}</Text>
+      <Text style={styles.ghostSub}>
+        {!hover ? 'גרור אל תיקייה או בין קבצים' : entries.some((x) => x.uri === hover && !x.isDir) ? 'שחרר כדי לסדר כאן' : 'שחרר כדי להעביר'}
+      </Text>
     </View>
   ) : null;
 
@@ -1048,8 +1081,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   if (!current) {
     const showingSearch = search.trim().length >= 2;
     return (
-      <View style={styles.flex1} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <View style={styles.flex1} ref={rootRef} collapsable={false} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" scrollEnabled={!drag}>
           <View style={styles.headerRow}>
             <Text style={styles.title}>מסמכים</Text>
             {viewToggle}
@@ -1123,7 +1156,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
                 </Text>
               ) : null}
               {folders.map((f) => (
-                <TouchableOpacity key={f.uri} style={styles.row} onPress={() => setPath([f])} onLongPress={() => disconnect(f)}>
+                <View
+                  key={f.uri}
+                  collapsable={false}
+                  ref={(v) => {
+                    targetRefs.current['root:' + f.uri] = v;
+                  }}
+                >
+                <TouchableOpacity style={[styles.row, hover === 'root:' + f.uri && styles.dropHover]} onPress={() => setPath([f])} onLongPress={() => disconnect(f)}>
                   <Text style={styles.folderIcon}>📂</Text>
                   <View style={styles.flex1}>
                     <Text style={styles.rowTitle}>{f.name}</Text>
@@ -1131,11 +1171,13 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
                   </View>
                   <Text style={styles.chev}>‹</Text>
                 </TouchableOpacity>
+                </View>
               ))}
             </>
           )}
         </ScrollView>
         {selectBar}
+        {ghost}
         {menuPopup}
         {scanPopup}
         {qualityPopup}
@@ -1196,7 +1238,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
             </View>
             {scanBusy ? <Text style={styles.popupHint}>⏳ מעבד את הקובץ…</Text> : qualityLine}
             {entries.some((e) => !e.isDir) ? (
-              <Text style={styles.popupHint}>טיפ: לחיצה ארוכה על קובץ וגרירה אל תיקייה מעבירה אותו. ⋮ לתפריט.</Text>
+              <Text style={styles.popupHint}>טיפ: לחיצה ארוכה על קובץ וגרירה: אל תיקייה כדי להעביר, או על קובץ אחר כדי לשנות סדר. ⋮ לתפריט.</Text>
             ) : null}
             <TextInput
               style={styles.input}
@@ -1211,7 +1253,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
                 [
                   ['name', 'לפי שם'],
                   ['date', 'לפי תאריך'],
-                ] as ['name' | 'date', string][]
+                  ['manual', 'ידני'],
+                ] as ['name' | 'date' | 'manual', string][]
               ).map(([k, label]) => (
                 <TouchableOpacity key={k} style={[styles.chip, sortBy === k && styles.chipOn]} onPress={() => setSortBy(k)}>
                   <Text style={[styles.chipText, sortBy === k && styles.chipTextOn]}>{label}</Text>
@@ -1317,7 +1360,7 @@ const makeStyles = (c: Palette) => ({
   tileMore: { position: 'absolute' as const, top: 4, left: 4, padding: 4 },
   ghost: {
     position: 'absolute' as const,
-    right: 24,
+    width: 220,
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 14,
