@@ -20,6 +20,14 @@ export interface StickyNote {
   scheduleDate?: string; // YYYY-MM-DD
   scheduleTime?: string; // HH:MM
   notificationId?: string | null;
+  docs?: DocLink[]; // attached documents from the documents tab
+}
+
+/** A file from a connected folder, attached to a task or a note. */
+export interface DocLink {
+  uri: string;
+  name: string;
+  mime: string;
 }
 
 export interface WorkoutLink {
@@ -239,6 +247,7 @@ export interface Task {
   repeatDays?: number[]; // recurring task: next due date after completion
   areaId?: string; // remind when entering this location area
   subtasks?: SubTask[];
+  docs?: DocLink[]; // attached documents
 }
 
 export interface DocFolder {
@@ -309,3 +318,28 @@ export interface MyRingtone {
 
 export const loadRingtones = async () => (await readJson<MyRingtone[]>(RINGTONES_KEY)) ?? [];
 export const saveRingtones = (list: MyRingtone[]) => writeJson(RINGTONES_KEY, list);
+
+// ---------- documents tab: favorites, recent, expiry ----------
+
+export const DOC_META_KEY = '@avi_doc_meta_v1';
+export const DOC_RECENT_KEY = '@avi_doc_recent_v1';
+export const DOC_VIEW_KEY = '@avi_doc_view_v1';
+
+export interface DocMeta {
+  name: string;
+  mime: string;
+  fav?: boolean;
+  expiry?: string; // YYYY-MM-DD
+  remindDays?: number; // remind this many days before the expiry (0 = no reminder)
+}
+
+export interface RecentDoc extends DocLink {
+  at: number;
+}
+
+export const loadDocMeta = async () => (await readJson<Record<string, DocMeta>>(DOC_META_KEY)) ?? {};
+export const saveDocMeta = (m: Record<string, DocMeta>) => writeJson(DOC_META_KEY, m);
+export const loadDocRecent = async () => (await readJson<RecentDoc[]>(DOC_RECENT_KEY)) ?? [];
+export const saveDocRecent = (r: RecentDoc[]) => writeJson(DOC_RECENT_KEY, r);
+export const loadDocView = async () => ((await readJson<string>(DOC_VIEW_KEY)) as 'list' | 'grid' | null) ?? 'list';
+export const saveDocView = (v: 'list' | 'grid') => writeJson(DOC_VIEW_KEY, v);

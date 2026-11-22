@@ -12,6 +12,7 @@ import {
   Task,
   WorkoutGroup,
   localDateString,
+  DocMeta,
 } from './storage';
 
 export interface BackupData {
@@ -22,6 +23,7 @@ export interface BackupData {
   groups: WorkoutGroup[];
   tasks: Task[];
   docFolders: DocFolder[];
+  docMeta?: Record<string, DocMeta>;
   sounds: SoundSettings;
   themeMode?: string;
 }
@@ -69,6 +71,7 @@ export async function pickBackup(): Promise<BackupData | null> {
       groups: Array.isArray(parsed.groups) ? parsed.groups : [],
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
       docFolders: Array.isArray(parsed.docFolders) ? parsed.docFolders : [],
+      docMeta: parsed.docMeta && typeof parsed.docMeta === 'object' ? parsed.docMeta : undefined,
       sounds: parsed.sounds && typeof parsed.sounds === 'object' ? parsed.sounds : {},
       themeMode: typeof parsed.themeMode === 'string' ? parsed.themeMode : undefined,
     };

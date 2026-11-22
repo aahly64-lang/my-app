@@ -9,6 +9,7 @@ import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } fro
 import { DAY_LETTERS, daysSummary, displayYMD, parseHHMM, parseYMD, pickDate } from './pickers';
 import { cancelRing, scheduleReminder, taskRingId } from './rings';
 import { syncGeofences } from './geoTask';
+import { DocChips } from './docLinks';
 import { AlarmArea, Task, loadAreas, loadTasks, localDateString, newId, saveTasks } from './storage';
 
 const HISTORY_DAYS = 30;
@@ -351,6 +352,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
                 t.repeatDays?.length ? `🔁 ${daysSummary(t.repeatDays)}` : '',
                 area ? `📍 ${area.label}` : '',
                 subs.length ? `☑ ${subsDone}/${subs.length}` : '',
+                t.docs?.length ? `📎 ${t.docs.length}` : '',
               ]
                 .filter(Boolean)
                 .join('  ')}
@@ -477,6 +479,11 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
               placeholder="פרטים (לא חובה)"
               placeholderTextColor={c.muted}
               multiline
+            />
+            {edit.docs?.length ? <Text style={styles.label}>📎 מסמכים מצורפים</Text> : null}
+            <DocChips
+              docs={edit.docs}
+              onRemove={(d) => setEdit({ ...edit, docs: (edit.docs ?? []).filter((x) => x.uri !== d.uri) })}
             />
             <View style={styles.switchRowPlain}>
               <Text style={styles.label}>⭐ חשובה</Text>

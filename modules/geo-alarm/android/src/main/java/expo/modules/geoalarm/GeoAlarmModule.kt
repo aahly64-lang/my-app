@@ -20,6 +20,8 @@ class GeoAlarmModule : Module() {
 
   private var consumedIntentHash: Int? = null
   private var pendingSoundPromise: Promise? = null
+  private var pendingScanPromise: Promise? = null
+  private val scanRequestCode = 4721
   private val soundRequestCode = 46077
 
   private fun soundTitle(uri: String?): String {
@@ -189,7 +191,82 @@ class GeoAlarmModule : Module() {
       }
     }
 
+    // ---------- documents ----------
+    AsyncFunction("searchDocuments") { roots: List<String>, query: String, limit: Int ->
+      DocumentsHelper.search(context, roots, query, limit)
+    }
+
+    AsyncFunction("documentThumbnail") { uri: String, mime: String, size: Int, stamp: Double ->
+      DocumentsHelper.thumbnail(context, uri, mime, size, stamp.toLong())
+    }
+
+    Function("renameDocument") { uri: String, name: String ->
+      DocumentsHelper.rename(context, uri, name)
+    }
+
+    Function("deleteDocument") { uri: String ->
+      DocumentsHelper.delete(context, uri)
+    }
+
+    Function("shareDocuments") { uris: List<String>, mimes: List<String> ->
+      DocumentsHelper.shareMany(context, uris, mimes)
+    }
+
+    AsyncFunction("copyIntoFolder") { src: String, treeUri: String, name: String, mime: String ->
+      DocumentsHelper.copyInto(context, src, treeUri, name, mime)
+    }
+
+    /** Google's document scanner: returns the content uri of the scanned PDF, or null if cancelled. */
+    AsyncFunction("scanDocument") { promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.reject("ERR_SCAN", "אין מסך פעיל", null)
+        return@AsyncFunction
+      }
+      pendingScanPromise?.resolve(null)
+      pendingScanPromise = promise
+      try {
+        val options = com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder()
+          .setGalleryImportAllowed(true)
+          .setPageLimit(30)
+          .setResultFormats(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+          .setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+          .build()
+        com.google.mlkit.vision.documentscanner.GmsDocumentScanning.getClient(options)
+          .getStartScanIntent(activity)
+          .addOnSuccessListener { sender ->
+            try {
+              activity.startIntentSenderForResult(sender, scanRequestCode, null, 0, 0, 0)
+            } catch (e: Exception) {
+              pendingScanPromise = null
+              promise.reject("ERR_SCAN", e.message ?: "הסורק לא נפתח", e)
+            }
+          }
+          .addOnFailureListener { e ->
+            pendingScanPromise = null
+            promise.reject("ERR_SCAN", e.message ?: "הסורק לא זמין בטלפון", e)
+          }
+      } catch (e: Throwable) {
+        pendingScanPromise = null
+        promise.reject("ERR_SCAN", e.message ?: "הסורק לא זמין בטלפון", e)
+      }
+    }
+
     OnActivityResult { _, payload ->
+      if (payload.requestCode == scanRequestCode) {
+        val promise = pendingScanPromise ?: return@OnActivityResult
+        pendingScanPromise = null
+        if (payload.resultCode != android.app.Activity.RESULT_OK) {
+          promise.resolve(null)
+          return@OnActivityResult
+        }
+        val result = com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult.fromActivityResultIntent(payload.data)
+        val pdf = result?.pdf
+        promise.resolve(
+          if (pdf == null) null else mapOf("uri" to pdf.uri.toString(), "pages" to pdf.pageCount.toDouble())
+        )
+        return@OnActivityResult
+      }
       if (payload.requestCode != soundRequestCode) return@OnActivityResult
       val promise = pendingSoundPromise ?: return@OnActivityResult
       pendingSoundPromise = null

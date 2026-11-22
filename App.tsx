@@ -21,6 +21,7 @@ import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from './modules/geo-alarm';
 import MapPicker, { MapSelection } from './src/MapPicker';
 import RingtonesScreen from './src/RingtonesScreen';
+import { DocChips } from './src/docLinks';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
@@ -60,6 +61,8 @@ import {
   migrateCategories,
   loadBoard,
   loadDocFolders,
+  loadDocMeta,
+  saveDocMeta,
   loadGroups,
   loadSounds,
   loadTasks,
@@ -527,6 +530,7 @@ function AppInner({
         createdAt: Date.now(),
         order: tasks.reduce((m, t) => Math.min(m, t.order), 0) - 1,
         subtasks: [],
+        docs: note.docs,
       };
       await saveTasks([task, ...tasks]);
       setNotes((prev) => prev.filter((n) => n.id !== note.id));
@@ -545,6 +549,7 @@ function AppInner({
         .filter(Boolean)
         .join('\n'),
       updatedAt: new Date().toISOString(),
+      docs: t.docs,
     };
     setNotes((prev) => [item, ...prev]);
     setActiveTab('notes');
@@ -797,6 +802,7 @@ function AppInner({
         areas: await loadAreas(),
         alarms,
         docFolders: await loadDocFolders(),
+        docMeta: await loadDocMeta(),
         sounds: await loadSounds(),
         themeMode,
       });
@@ -830,6 +836,7 @@ function AppInner({
         await saveGroups(groups);
         await saveTasks(data.tasks);
         await saveDocFolders(data.docFolders);
+        if (data.docMeta) await saveDocMeta(data.docMeta);
         await saveSounds(data.sounds);
         if (data.themeMode) setThemeMode(data.themeMode as ThemeMode);
         cancelRing(TIMER_RING_ID);
@@ -889,7 +896,19 @@ function AppInner({
       {activeTab === 'workouts' ? (
         <WorkoutsTab dataVersion={dataVersion} shared={shared} onSharedUsed={onSharedUsed} />
       ) : null}
-      {activeTab === 'docs' ? <DocsTab dataVersion={dataVersion} /> : null}
+      {activeTab === 'docs' ? (
+        <DocsTab
+          dataVersion={dataVersion}
+          notes={notes.map((n) => ({ id: n.id, title: n.title }))}
+          onAttachToNote={(noteId, link) =>
+            setNotes((prev) =>
+              prev.map((n) =>
+                n.id === noteId ? { ...n, docs: [...(n.docs ?? []).filter((d) => d.uri !== link.uri), link] } : n
+              )
+            )
+          }
+        />
+      ) : null}
 
       {activeTab === 'notes' || activeTab === 'alarms' ? (
       <ScrollView style={styles.desk} contentContainerStyle={styles.deskContent} keyboardShouldPersistTaps="handled">
@@ -932,6 +951,14 @@ function AppInner({
                     {note.body}
                   </Text>
                   {reminderTag(note) ? <Text style={styles.scheduleTag}>{reminderTag(note)}</Text> : null}
+                  <DocChips
+                    docs={note.docs}
+                    onRemove={(d) =>
+                      setNotes((prev) =>
+                        prev.map((n) => (n.id === note.id ? { ...n, docs: (n.docs ?? []).filter((x) => x.uri !== d.uri) } : n))
+                      )
+                    }
+                  />
                   <Text style={styles.noteDate}>
                     {note.done ? 'בוצע · ' : ''}
                     {formatHebrewDate(note.updatedAt)}

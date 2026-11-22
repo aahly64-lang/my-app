@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  I18nManager,
   LayoutChangeEvent,
   Modal,
   Switch,
@@ -26,6 +27,8 @@ import {
   saveSounds,
 } from './storage';
 
+/** In right-to-left layout the timeline starts at the right edge. */
+const RTL = I18nManager.isRTL;
 const DEFAULT_MAX_MS = 40_000;
 const MIN_MS = 1_000;
 const WAVE_BUCKETS = 1500;
@@ -165,8 +168,36 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
     }
   };
 
-  const save = async () => {
+  const save = () => {
     if (!draft) return;
+    const len = draft.end - draft.start;
+    if (len > draft.maxMs) {
+      const label = MAX_CHOICES.find(([ms]) => ms === draft.maxMs)?.[1] ?? '';
+      Alert.alert('הקטע ארוך מהמקסימום', `הקטע באורך ${fmt(len)}, והאורך המקסימלי שבחרת הוא ${label}.`, [
+        { text: 'ביטול', style: 'cancel' },
+        {
+          text: 'שמור כמו שהוא',
+          onPress: () => doSave(draft),
+        },
+        {
+          text: `כווץ ל-${label}`,
+          onPress: () => {
+            const mid = (draft.start + draft.end) / 2;
+            let start = Math.max(0, mid - draft.maxMs / 2);
+            let end = Math.min(draft.duration, start + draft.maxMs);
+            start = Math.max(0, end - draft.maxMs);
+            const d = { ...draft, start, end };
+            setDraft(d);
+            doSave(d);
+          },
+        },
+      ]);
+      return;
+    }
+    doSave(draft);
+  };
+
+  const doSave = async (draft: Draft) => {
     const name = draft.name.trim() || 'צלצול';
     stopPlay();
     setBusy(true);
@@ -503,27 +534,14 @@ function Editor({
     if (warnTimer.current) clearTimeout(warnTimer.current);
   }, []);
 
-  /** Moves one marker only. The other marker never moves. */
+  /** Moves one marker only. The other marker never moves; the maximum only warns. */
   const apply = (which: 'start' | 'end', v: number) => {
     const d = ref.current;
-    const lim = Math.min(d.maxMs, d.duration);
     let start = d.start;
     let end = d.end;
-    let hitMax = false;
-    if (which === 'start') {
-      start = Math.max(0, Math.min(v, end - MIN_MS));
-      if (end - start > lim) {
-        start = end - lim;
-        hitMax = true;
-      }
-    } else {
-      end = Math.min(d.duration, Math.max(v, start + MIN_MS));
-      if (end - start > lim) {
-        end = start + lim;
-        hitMax = true;
-      }
-    }
-    if (hitMax) showWarn();
+    if (which === 'start') start = Math.max(0, Math.min(v, end - MIN_MS));
+    else end = Math.min(d.duration, Math.max(v, start + MIN_MS));
+    if (end - start > d.maxMs && d.end - d.start <= d.maxMs) showWarn();
     const next = { ...d, start, end };
     ref.current = next;
     setDraft(next);
@@ -545,9 +563,24 @@ function Editor({
     onPlayFrom(v);
   };
 
+  /** Choosing a maximum shrinks a longer selection equally from both sides. */
   const setMax = (m: number) => {
     const d = { ...draft, maxMs: m };
-    if (d.end - d.start > m) d.end = d.start + m;
+    if (d.end - d.start > m) {
+      const mid = (d.start + d.end) / 2;
+      let start = mid - m / 2;
+      let end = mid + m / 2;
+      if (start < 0) {
+        end -= start;
+        start = 0;
+      }
+      if (end > d.duration) {
+        start -= end - d.duration;
+        end = d.duration;
+      }
+      d.start = Math.max(0, start);
+      d.end = end;
+    }
     ref.current = d;
     setDraft(d);
   };
@@ -611,14 +644,19 @@ function Editor({
         styles={styles}
       />
       <View style={styles.timesRow}>
-        <Text style={styles.timeSmall}>{fmt(from)}</Text>
-        <Text style={styles.timeSmall}>{fmt(to)}</Text>
+        <Text style={styles.timeSmall}>
+          {view ? 'תחילת התצוגה' : 'תחילת השיר'} {fmt(from)}
+        </Text>
+        <Text style={styles.timeSmall}>
+          {view ? 'סוף התצוגה' : 'סוף השיר'} {fmt(to)}
+        </Text>
       </View>
 
-      {warn ? (
+      {warn || len > draft.maxMs ? (
         <View style={styles.warnBox}>
           <Text style={styles.warnText}>
-            הגעת לאורך המקסימלי ({maxLabel}). אפשר לשנות אותו ב"אורך מקסימלי" למטה.
+            הקטע ({fmt(len)}) ארוך מהאורך המקסימלי ({maxLabel}). אפשר להמשיך, או ללחוץ שוב על "{maxLabel}" למטה כדי
+            לכווץ אותו באופן שווה משני הצדדים.
           </Text>
         </View>
       ) : null}
@@ -844,14 +882,15 @@ function Wave({
     Gesture.Pan()
       .runOnJS(true)
       .minDistance(0)
-      .hitSlop({ horizontal: 14, vertical: 10 })
+      .hitSlop({ horizontal: 18, vertical: 12 })
       .onBegin(() => {
         base.current = which === 'start' ? live.current.start : live.current.end;
         setDragging(which);
       })
       .onUpdate((e) => {
         const L = live.current;
-        L.onMove(which, base.current + (e.translationX / L.width) * L.span);
+        const dx = RTL ? -e.translationX : e.translationX;
+        L.onMove(which, base.current + (dx / L.width) * L.span);
       })
       .onFinalize(() => setDragging(null));
 
@@ -868,13 +907,15 @@ function Wave({
       })
       .onUpdate((e) => {
         const L = live.current;
-        const v = Math.max(0, cursorBase.current + (e.translationX / L.width) * L.span);
+        const dx = RTL ? -e.translationX : e.translationX;
+        const v = Math.max(0, cursorBase.current + (dx / L.width) * L.span);
         setDragCur(v);
         L.onCursor(v, false);
       })
       .onEnd((e) => {
         const L = live.current;
-        L.onCursor(Math.max(0, cursorBase.current + (e.translationX / L.width) * L.span), true);
+        const dx = RTL ? -e.translationX : e.translationX;
+        L.onCursor(Math.max(0, cursorBase.current + (dx / L.width) * L.span), true);
       })
       .onFinalize(() => setDragCur(null))
   ).current;
@@ -883,7 +924,8 @@ function Wave({
       .runOnJS(true)
       .onEnd((e) => {
         const L = live.current;
-        L.onCursor(L.from + (e.x / L.width) * L.span, true);
+        const x = RTL ? L.width - e.x : e.x;
+        L.onCursor(L.from + (x / L.width) * L.span, true);
       })
   ).current;
 
@@ -1071,13 +1113,13 @@ const makeStyles = (c: Palette) => ({
   waveHeader: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const },
   zoomBtn: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: c.subtle, marginTop: 8 },
   zoomText: { fontSize: 13.5, fontWeight: '700' as const, color: c.text },
-  waveOuter: { direction: 'ltr' as const, marginHorizontal: 22, marginTop: 10, paddingTop: TOP_SPACE, height: TOP_SPACE + WAVE_H + 78 },
+  waveOuter: { marginHorizontal: 22, marginTop: 10, paddingTop: TOP_SPACE, height: TOP_SPACE + WAVE_H + 78 },
   waveBox: { height: WAVE_H, borderRadius: 12, backgroundColor: c.subtle, overflow: 'hidden' as const },
   waveLoading: { flex: 1, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 6 },
   barsRow: { flex: 1, flexDirection: 'row' as const, alignItems: 'center' as const },
   bar: { width: BAR_W, marginRight: BAR_GAP, borderRadius: 2 },
   barOn: { backgroundColor: c.accent },
-  barOff: { backgroundColor: c.border },
+  barOff: { backgroundColor: c.muted, opacity: 0.55 },
   selShade: { position: 'absolute' as const, top: 0, bottom: 0, backgroundColor: c.accent, opacity: 0.12 },
   playhead: { position: 'absolute' as const, top: TOP_SPACE - 4, height: WAVE_H + 4, width: 2, backgroundColor: c.text },
   cursorPill: {
@@ -1165,7 +1207,13 @@ const makeStyles = (c: Palette) => ({
   chipOn: { backgroundColor: c.accent, borderColor: c.accent },
   chipText: { fontSize: 13.5, color: c.text, fontWeight: '600' as const },
   chipTextOn: { color: c.onAccent, fontWeight: '800' as const },
-  tfRow: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, direction: 'ltr' as const, gap: 6, marginVertical: 8 },
+  tfRow: {
+    flexDirection: RTL ? ('row-reverse' as const) : ('row' as const),
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 6,
+    marginVertical: 8,
+  },
   tfCol: { alignItems: 'center' as const, gap: 4 },
   tfBump: { width: 44, height: 32, borderRadius: 8, backgroundColor: c.subtle, alignItems: 'center' as const, justifyContent: 'center' as const },
   tfInput: {
@@ -1181,7 +1229,7 @@ const makeStyles = (c: Palette) => ({
   },
   tfLabel: { fontSize: 12, color: c.muted },
   tfSep: { fontSize: 26, fontWeight: '800' as const, color: c.text, marginBottom: 20 },
-  timesRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, direction: 'ltr' as const },
+  timesRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginHorizontal: 8 },
   timeSmall: { fontSize: 11.5, color: c.muted },
   fineRow: { flexDirection: 'row' as const, alignItems: 'center' as const, marginTop: 10, gap: 10 },
   fineLabel: { width: 78, fontSize: 14, fontWeight: '700' as const, color: c.text },

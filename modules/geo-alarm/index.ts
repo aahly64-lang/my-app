@@ -28,6 +28,9 @@ export interface DocEntry {
   isDir: boolean;
   size: number;
   modified: number;
+  /** search results only: where the file is, and which connected folder it belongs to */
+  folder?: string;
+  treeUri?: string;
 }
 
 type GeoAlarmNative = {
@@ -41,6 +44,13 @@ type GeoAlarmNative = {
   openDocument(uri: string, mime: string): boolean;
   shareDocument(uri: string, mime: string): boolean;
   releaseFolder(uri: string): void;
+  searchDocuments(roots: string[], query: string, limit: number): Promise<DocEntry[]>;
+  documentThumbnail(uri: string, mime: string, size: number, stamp: number): Promise<string | null>;
+  renameDocument(uri: string, name: string): string | null;
+  deleteDocument(uri: string): boolean;
+  shareDocuments(uris: string[], mimes: string[]): boolean;
+  copyIntoFolder(src: string, treeUri: string, name: string, mime: string): Promise<string | null>;
+  scanDocument(): Promise<{ uri: string; pages: number } | null>;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
   stopAlarm(): void;
   canUseFullScreenIntent(): boolean;
@@ -101,6 +111,35 @@ export const GeoAlarm = {
   openDocument: (uri: string, mime: string) => safe(() => native!.openDocument(uri, mime), false),
   shareDocument: (uri: string, mime: string) => safe(() => native!.shareDocument(uri, mime), false),
   releaseFolder: (uri: string) => safe(() => native!.releaseFolder(uri), undefined),
+  searchDocuments: async (roots: string[], query: string, limit = 300): Promise<DocEntry[]> => {
+    try {
+      return native ? await native.searchDocuments(roots, query, limit) : [];
+    } catch {
+      return [];
+    }
+  },
+  documentThumbnail: async (uri: string, mime: string, size: number, stamp: number): Promise<string | null> => {
+    try {
+      return native ? await native.documentThumbnail(uri, mime, size, stamp) : null;
+    } catch {
+      return null;
+    }
+  },
+  renameDocument: (uri: string, name: string) => safe(() => native!.renameDocument(uri, name), null),
+  deleteDocument: (uri: string) => safe(() => native!.deleteDocument(uri), false),
+  shareDocuments: (uris: string[], mimes: string[]) => safe(() => native!.shareDocuments(uris, mimes), false),
+  copyIntoFolder: async (src: string, treeUri: string, name: string, mime: string): Promise<string | null> => {
+    try {
+      return native ? await native.copyIntoFolder(src, treeUri, name, mime) : null;
+    } catch {
+      return null;
+    }
+  },
+  /** Opens Google's document scanner. Throws with a Hebrew message if it isn't available. */
+  scanDocument: async (): Promise<{ uri: string; pages: number } | null> => {
+    if (!native) throw new Error('לא זמין במכשיר הזה');
+    return native.scanDocument();
+  },
   getSoundTitle: (uri: string | null) => safe(() => native!.getSoundTitle(uri), 'ברירת מחדל'),
   pickSound: async (current: string | null, title: string) => {
     try {
