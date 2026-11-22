@@ -34,6 +34,9 @@ import { ThemeContext, ThemeMode, paletteFor, useTheme } from './src/theme';
 import StopwatchCard from './src/Stopwatch';
 import { RichText, htmlToPlain, noteBg, plainToHtml } from './src/richNote';
 import NoteScreen from './src/NoteScreen';
+import { installCrashLog, showLastCrash } from './src/crashLog';
+
+installCrashLog();
 import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './src/ui';
 import { DAY_LETTERS, daysSummary, displayYMD, endOfDay, hhmm, parseHHMM, parseYMD, pickTimeWheels } from './src/pickers';
 import {
@@ -251,6 +254,9 @@ export default function App() {
   const [accent, setAccentState] = useState('yellow');
   useEffect(() => {
     loadAccent().then(setAccentState);
+  }, []);
+  useEffect(() => {
+    setTimeout(showLastCrash, 1500);
   }, []);
   const setAccent = (k: string) => {
     setAccentState(k);

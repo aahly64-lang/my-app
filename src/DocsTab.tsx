@@ -219,9 +219,6 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   }, [dataVersion]);
 
   const current = path[path.length - 1];
-  useEffect(() => {
-    targetRefs.current = {};
-  }, [current]);
 
   const refresh = useCallback(async () => {
     if (!current) return;
@@ -509,6 +506,13 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     }
   };
   const targetAt = (x: number, y: number) => {
+    // measure anything that was not measured yet (refs can attach after the drag started)
+    for (const [key, v] of Object.entries(targetRefs.current)) {
+      if (v && !targetRects.current[key])
+        v.measureInWindow((mx, my, w, h) => {
+          targetRects.current[key] = { x: mx, y: my, w, h };
+        });
+    }
     for (const [key, r] of Object.entries(targetRects.current)) if (inRect(r, x, y)) return key;
     return null;
   };
@@ -739,7 +743,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       <View
         key={e.uri}
         ref={(v) => {
-          if (e.isDir || current) targetRefs.current[e.uri] = v;
+          if (!v) delete targetRefs.current[e.uri];
+          else if (e.isDir || current) targetRefs.current[e.uri] = v;
         }}
         collapsable={false}
       >
@@ -777,7 +782,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       <View
         key={e.uri}
         ref={(v) => {
-          if (e.isDir || current) targetRefs.current[e.uri] = v;
+          if (!v) delete targetRefs.current[e.uri];
+          else if (e.isDir || current) targetRefs.current[e.uri] = v;
         }}
         collapsable={false}
       >
@@ -1160,7 +1166,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
                   key={f.uri}
                   collapsable={false}
                   ref={(v) => {
-                    targetRefs.current['root:' + f.uri] = v;
+                    if (v) targetRefs.current['root:' + f.uri] = v;
+                    else delete targetRefs.current['root:' + f.uri];
                   }}
                 >
                 <TouchableOpacity style={[styles.row, hover === 'root:' + f.uri && styles.dropHover]} onPress={() => setPath([f])} onLongPress={() => disconnect(f)}>

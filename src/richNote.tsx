@@ -242,6 +242,7 @@ export function NoteEditor({
         placeholder="כתוב כאן..."
         initialHeight={fill ? undefined : 170}
         useContainer={!fill}
+        scrollEnabled={!!fill}
         editorStyle={{
           backgroundColor: c.noteInput,
           color: c.noteText,

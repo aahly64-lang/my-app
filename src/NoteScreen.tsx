@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Keyboard, Modal, ScrollView, StatusBar, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Keyboard, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { saveCrash } from './crashLog';
 import { NoteColorPicker, NoteEditor, noteBg } from './richNote';
 import { ReminderEditor, ReminderValue } from './ui';
 import { Palette, useTheme, useThemedStyles } from './theme';
@@ -45,32 +46,6 @@ export default function NoteScreen({
   const styles = useThemedStyles(makeStyles);
   const [options, setOptions] = useState(false);
 
-  // Keep the toolbar above the keyboard, whether or not the window itself resizes.
-  const rootRef = useRef<View>(null);
-  const [kbTop, setKbTop] = useState<number | null>(null);
-  const [pad, setPad] = useState(0);
-  const measure = (top: number | null) => {
-    if (top === null) {
-      setPad(0);
-      return;
-    }
-    rootRef.current?.measureInWindow((_x, y, _w, h) => setPad(Math.max(0, Math.round(y + h - top))));
-  };
-  useEffect(() => {
-    const s = Keyboard.addListener('keyboardDidShow', (e) => {
-      setKbTop(e.endCoordinates.screenY);
-      measure(e.endCoordinates.screenY);
-    });
-    const h = Keyboard.addListener('keyboardDidHide', () => {
-      setKbTop(null);
-      setPad(0);
-    });
-    return () => {
-      s.remove();
-      h.remove();
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     if (!visible) setOptions(false);
   }, [visible]);
@@ -78,13 +53,8 @@ export default function NoteScreen({
   const bg = noteBg(color, c) ?? c.bg;
 
   return (
-    <Modal visible={visible} animationType="slide" statusBarTranslucent onRequestClose={() => (options ? setOptions(false) : onClose())}>
-      <View
-        ref={rootRef}
-        collapsable={false}
-        style={[styles.root, { backgroundColor: bg, paddingBottom: pad, paddingTop: StatusBar.currentHeight ?? 0 }]}
-        onLayout={() => kbTop !== null && measure(kbTop)}
-      >
+    <Modal visible={visible} animationType="slide" onRequestClose={() => (options ? setOptions(false) : onClose())}>
+      <View style={[styles.root, { backgroundColor: bg }]}>
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} hitSlop={12} style={styles.iconBtn}>
             <Text style={styles.iconText}>✕</Text>
@@ -95,6 +65,16 @@ export default function NoteScreen({
               <Text style={styles.iconText}>⤴</Text>
             </TouchableOpacity>
           ) : null}
+          <TouchableOpacity
+            style={[styles.iconBtn, options && styles.moreBtnOn]}
+            hitSlop={8}
+            onPress={() => {
+              Keyboard.dismiss();
+              setOptions(!options);
+            }}
+          >
+            <Text style={[styles.iconText, options && { color: c.onAccent }]}>⋯</Text>
+          </TouchableOpacity>
           <TouchableOpacity onPress={onSave} hitSlop={8} style={styles.saveBtn}>
             <Text style={styles.saveText}>✓ שמור</Text>
           </TouchableOpacity>
@@ -107,28 +87,6 @@ export default function NoteScreen({
           placeholderTextColor={c.muted}
         />
 
-        <View style={styles.flex1}>
-          {visible ? (
-            <NoteEditor
-              key={editorKey}
-              fill
-              initialHtml={initialHtml}
-              onChange={onHtml}
-              trailing={
-                <TouchableOpacity
-                  style={[styles.moreBtn, options && styles.moreBtnOn]}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    setOptions(!options);
-                  }}
-                >
-                  <Text style={[styles.moreText, options && { color: c.onAccent }]}>⋯</Text>
-                </TouchableOpacity>
-              }
-            />
-          ) : null}
-        </View>
-
         {options ? (
           <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
             <Text style={styles.label}>צבע הפתק</Text>
@@ -137,6 +95,20 @@ export default function NoteScreen({
             {extra}
           </ScrollView>
         ) : null}
+
+        <View style={styles.flex1}>
+          {visible ? (
+            <EditorGuard onClose={onClose}>
+            <NoteEditor
+              key={editorKey}
+              fill
+              initialHtml={initialHtml}
+              onChange={onHtml}
+            />
+            </EditorGuard>
+          ) : null}
+        </View>
+
       </View>
     </Modal>
   );
@@ -180,7 +152,33 @@ const makeStyles = (c: Palette) => ({
   moreBtn: { width: 44, height: 44, alignItems: 'center' as const, justifyContent: 'center' as const },
   moreBtnOn: { backgroundColor: c.accent },
   moreText: { fontSize: 22, fontWeight: '900' as const, color: c.text },
-  sheet: { maxHeight: '55%' as const, backgroundColor: c.card, borderTopWidth: 1, borderTopColor: c.border },
+  sheet: { maxHeight: '50%' as const, backgroundColor: c.card, borderTopWidth: 1, borderBottomWidth: 1, borderColor: c.border },
   sheetContent: { padding: 14, paddingBottom: 24 },
   label: { fontSize: 13, fontWeight: '700' as const, color: c.muted, marginBottom: 2 },
 });
+
+/** A JavaScript error inside the editor shows a message instead of closing the whole app. */
+class EditorGuard extends React.Component<{ onClose: () => void; children: React.ReactNode }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(e: Error) {
+    return { error: String(e?.message ?? e) };
+  }
+  componentDidCatch(e: Error) {
+    saveCrash('note-editor', e);
+  }
+  render() {
+    if (this.state.error)
+      return (
+        <View style={{ padding: 20 }}>
+          <Text style={{ fontSize: 16, marginBottom: 8 }}>העורך נתקל בשגיאה:</Text>
+          <Text selectable style={{ fontSize: 13, color: '#D70015' }}>
+            {this.state.error}
+          </Text>
+          <TouchableOpacity onPress={this.props.onClose} style={{ marginTop: 16 }}>
+            <Text style={{ fontSize: 16, fontWeight: '700' }}>סגור</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    return this.props.children;
+  }
+}
