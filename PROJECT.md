@@ -215,3 +215,7 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - רשת ביטחון: EditorGuard (ErrorBoundary) סביב העורך מציג את השגיאה במקום לסגור את האפליקציה. src/crashLog.ts שומר שגיאה קטלנית (ErrorUtils) ומציג אותה בהפעלה הבאה.
 - "⋯" עבר לראש המסך ליד "✓ שמור". האפשרויות נפתחות מתחת לכותרת. העורך גולל בתוכו (scrollEnabled).
 - גרירה במסמכים לא העבירה קבצים: useEffect ניקה את targetRefs אחרי כל ניווט, כלומר אחרי שה-refs כבר נרשמו, ולכן בתחילת הגרירה לא היו מטרות. ה-effect הוסר, refs ריקים נמחקים, ומטרה שלא נמדדה נמדדת בזמן הגרירה.
+
+## גרסה 1.9.3 (22/11/2026)
+- הקריסה בפתיחת פתק, לפי הודעת crashLog ששלח אבי: "ListMetricsAggregator must be notified of list content layout before resolving offsets". זה באג של VirtualizedList ב-RN 0.76 ב-FlatList אופקי ב-RTL. ה-RichToolbar של pell בנוי מ-FlatList כזה, והעטיפה החדשה (שורה עם ⋯) ב-1.9.1 הפעילה את הבאג. במקומו נבנה סרגל משלנו (ScrollView אופקי, TOOLS ב-richNote.tsx) שקורא ל-editor.sendAction, ומצב "פעיל" מגיע מ-registerToolbar.
+- העברת קבצים: native move מחזיר {status: moved|copied|failed, uri, error}. "copied" אומר שההעתקה הצליחה אבל מחיקת המקור נכשלה (למשל בתיקיית הורדות). אז מוצגת הודעה מתאימה עם הצעה לנתק ולחבר מחדש. בכישלון מוצגת הסיבה המדויקת לכל קובץ.

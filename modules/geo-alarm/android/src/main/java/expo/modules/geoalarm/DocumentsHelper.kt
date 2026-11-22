@@ -30,29 +30,42 @@ object DocumentsHelper {
    * Moves a file or folder into another folder. Tries a real move first (same storage); otherwise copies the
    * file and deletes the original. Returns the new uri, or null.
    */
-  fun move(ctx: Context, srcStr: String, srcParentStr: String, destStr: String): String? {
+  /**
+   * Moves a file or folder into another folder. Tries a real move first (same connected folder); otherwise copies
+   * the file and deletes the original.
+   * Returns {status: moved|copied|failed, uri?, error?}. "copied" = the copy is in place but the original could
+   * not be deleted.
+   */
+  fun move(ctx: Context, srcStr: String, srcParentStr: String, destStr: String): Map<String, Any?> {
     val src = Uri.parse(srcStr)
     val destTree = Uri.parse(destStr)
-    // Parent unknown (e.g. a file from "recent"): derive it from the document id ("primary:A/B/file.pdf" -> "primary:A/B").
-    val srcParent = if (srcParentStr.isNotEmpty()) {
-      val t = Uri.parse(srcParentStr)
-      DocumentsContract.buildDocumentUriUsingTree(t, rootDocId(ctx, t))
-    } else {
-      val id = DocumentsContract.getDocumentId(src)
-      val cut = id.lastIndexOf('/')
-      val parentId = if (cut > 0) id.substring(0, cut) else DocumentsContract.getTreeDocumentId(src)
-      DocumentsContract.buildDocumentUriUsingTree(src, parentId)
-    }
-    val dest = DocumentsContract.buildDocumentUriUsingTree(destTree, rootDocId(ctx, destTree))
+    var moveError: String? = null
     try {
+      val srcParent = if (srcParentStr.isNotEmpty()) {
+        val t = Uri.parse(srcParentStr)
+        DocumentsContract.buildDocumentUriUsingTree(t, rootDocId(ctx, t))
+      } else {
+        // Parent unknown (e.g. a file from "recent"): "primary:A/B/file.pdf" -> "primary:A/B".
+        val id = DocumentsContract.getDocumentId(src)
+        val cut = id.lastIndexOf('/')
+        val parentId = if (cut > 0) id.substring(0, cut) else DocumentsContract.getTreeDocumentId(src)
+        DocumentsContract.buildDocumentUriUsingTree(src, parentId)
+      }
+      val dest = DocumentsContract.buildDocumentUriUsingTree(destTree, rootDocId(ctx, destTree))
       val moved = DocumentsContract.moveDocument(ctx.contentResolver, src, srcParent, dest)
-      if (moved != null) return moved.toString()
+      if (moved != null) return mapOf("status" to "moved", "uri" to moved.toString())
     } catch (e: Exception) {
-      // fall through to copy + delete
+      moveError = e.javaClass.simpleName + ": " + (e.message ?: "")
     }
-    return try {
-      var name = "file"
-      var mime = "application/octet-stream"
+    // copy + delete
+    val dest = try {
+      DocumentsContract.buildDocumentUriUsingTree(destTree, rootDocId(ctx, destTree))
+    } catch (e: Exception) {
+      return mapOf("status" to "failed", "error" to "יעד לא תקין: ${e.message}")
+    }
+    var name = "file"
+    var mime = "application/octet-stream"
+    try {
       ctx.contentResolver.query(
         src,
         arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE),
@@ -63,15 +76,30 @@ object DocumentsHelper {
           mime = c.getString(1) ?: mime
         }
       }
-      if (mime == DocumentsContract.Document.MIME_TYPE_DIR) return null
-      val created = DocumentsContract.createDocument(ctx.contentResolver, dest, mime, name) ?: return null
-      ctx.contentResolver.openOutputStream(created)?.use { out ->
-        ctx.contentResolver.openInputStream(src)?.use { it.copyTo(out) }
-      }
-      DocumentsContract.deleteDocument(ctx.contentResolver, src)
-      created.toString()
     } catch (e: Exception) {
-      null
+      return mapOf("status" to "failed", "error" to "אין גישה לקובץ המקור (${e.javaClass.simpleName})")
+    }
+    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+      return mapOf("status" to "failed", "error" to "אי אפשר להעביר תיקייה בין תיקיות מחוברות שונות. ${moveError ?: ""}")
+    }
+    val created = try {
+      DocumentsContract.createDocument(ctx.contentResolver, dest, mime, name)
+    } catch (e: Exception) {
+      return mapOf("status" to "failed", "error" to "אין הרשאת כתיבה לתיקיית היעד (${e.javaClass.simpleName}: ${e.message ?: ""})")
+    } ?: return mapOf("status" to "failed", "error" to "לא הצלחתי ליצור את הקובץ בתיקיית היעד")
+    try {
+      ctx.contentResolver.openOutputStream(created)?.use { out ->
+        ctx.contentResolver.openInputStream(src)?.use { it.copyTo(out) } ?: throw IllegalStateException("אין קריאה מהמקור")
+      } ?: throw IllegalStateException("אין כתיבה ליעד")
+    } catch (e: Exception) {
+      try { DocumentsContract.deleteDocument(ctx.contentResolver, created) } catch (ignored: Exception) {}
+      return mapOf("status" to "failed", "error" to "ההעתקה נכשלה (${e.message ?: e.javaClass.simpleName})")
+    }
+    return try {
+      if (DocumentsContract.deleteDocument(ctx.contentResolver, src)) mapOf("status" to "moved", "uri" to created.toString())
+      else mapOf("status" to "copied", "uri" to created.toString())
+    } catch (e: Exception) {
+      mapOf("status" to "copied", "uri" to created.toString(), "error" to (e.javaClass.simpleName + ": " + (e.message ?: "")))
     }
   }
 
@@ -276,9 +304,9 @@ object DocumentsHelper {
       page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
       return bmp
     } finally {
-      try { page?.close() } catch (_: Exception) {}
-      try { renderer?.close() } catch (_: Exception) {}
-      try { pfd.close() } catch (_: Exception) {}
+      try { page?.close() } catch (ignored: Exception) {}
+      try { renderer?.close() } catch (ignored: Exception) {}
+      try { pfd.close() } catch (ignored: Exception) {}
     }
   }
 

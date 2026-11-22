@@ -462,12 +462,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     if (busyMove.current) return;
     busyMove.current = true;
     const pairs: [string, string][] = [];
-    let failed = 0;
+    const copied: string[] = [];
+    const errors: string[] = [];
     for (const e of list) {
       if (e.uri === dest.uri) continue;
-      const to = await GeoAlarm.moveDocument(e.uri, current?.uri ?? '', dest.uri);
-      if (to) pairs.push([e.uri, to]);
-      else failed++;
+      const r = await GeoAlarm.moveDocument(e.uri, current?.uri ?? '', dest.uri);
+      if (r.status === 'moved' && r.uri) pairs.push([e.uri, r.uri]);
+      else if (r.status === 'copied') copied.push(e.name);
+      else errors.push(`• ${e.name}: ${r.error ?? 'שגיאה לא ידועה'}`);
     }
     await relocate(pairs);
     busyMove.current = false;
@@ -475,7 +477,12 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     setMoveItems(null);
     if (current) refresh();
     if (results) setResults(results.filter((r) => !pairs.some(([from]) => from === r.uri)));
-    if (failed) Alert.alert('העברה', `${failed} פריטים לא הועברו. ייתכן שאין הרשאת כתיבה.`);
+    if (copied.length)
+      Alert.alert(
+        'הועתק, אבל המקור נשאר',
+        `${copied.join(', ')} הועתק ל"${dest.name}", אבל לא הצלחתי למחוק את הקובץ המקורי.\n\nכדי לתת הרשאה מלאה: נתק את תיקיית המקור (לחיצה ארוכה עליה במסך הראשי) וחבר אותה שוב.`
+      );
+    if (errors.length) Alert.alert('ההעברה נכשלה', errors.join('\n'));
   };
 
   const openMoveTo = (list: DocEntry[]) => {

@@ -21,6 +21,12 @@ export interface RingSpec {
   silent?: boolean; // ordinary notification instead of a full-screen ring
 }
 
+export interface MoveResult {
+  status: 'moved' | 'copied' | 'failed';
+  uri?: string;
+  error?: string;
+}
+
 export interface DocEntry {
   uri: string;
   name: string;
@@ -52,7 +58,7 @@ type GeoAlarmNative = {
   copyIntoFolder(src: string, treeUri: string, name: string, mime: string): Promise<string | null>;
   createFolder(parentUri: string, name: string): Promise<string | null>;
   scanDocument(quality: string): Promise<{ uri: string; pages: number } | null>;
-  moveDocument(src: string, srcParent: string, destFolder: string): Promise<string | null>;
+  moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
   pickContact(): Promise<{ name: string; phone: string } | null>;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
@@ -151,11 +157,11 @@ export const GeoAlarm = {
     if (!native) throw new Error('לא זמין במכשיר הזה');
     return native.scanDocument(quality);
   },
-  moveDocument: async (src: string, srcParent: string, destFolder: string): Promise<string | null> => {
+  moveDocument: async (src: string, srcParent: string, destFolder: string): Promise<MoveResult> => {
     try {
-      return native ? await native.moveDocument(src, srcParent, destFolder) : null;
-    } catch {
-      return null;
+      return native ? await native.moveDocument(src, srcParent, destFolder) : { status: 'failed', error: 'לא זמין' };
+    } catch (e: any) {
+      return { status: 'failed', error: String(e?.message ?? e) };
     }
   },
   pickContact: async (): Promise<{ name: string; phone: string } | null> => {

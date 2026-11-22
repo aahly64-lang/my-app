@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
-import { Text, TextStyle, TouchableOpacity, View } from 'react-native';
-import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
+import React, { useEffect, useRef, useState } from 'react';
+import { ScrollView, Text, TextStyle, TouchableOpacity, View } from 'react-native';
+import { RichEditor, actions } from 'react-native-pell-rich-editor';
 import { Palette, fontFor, useTheme, useThemedStyles } from './theme';
 
 // ---------------------------------------------------------------- note colors
@@ -206,6 +206,24 @@ export function RichText({
 
 const TEXT_COLORS = ['#111113', '#D70015', '#E8590C', '#1F9D55', '#0A84FF', '#8E5CF7', '#FF4F9A', '#8E8E93', '#FFFFFF'];
 const HILITE_COLORS = ['transparent', '#FFF07A', '#B8F5C8', '#BFE0FF', '#FFD0E4', '#FFD8A8'];
+const TOOLS: [string, string, TextStyle?][] = [
+  [actions.setBold, 'B', { fontWeight: '900' }],
+  [actions.setItalic, 'I', { fontStyle: 'italic', fontWeight: '700' }],
+  [actions.setUnderline, 'U', { textDecorationLine: 'underline', fontWeight: '700' }],
+  [actions.setStrikethrough, 'S', { textDecorationLine: 'line-through', fontWeight: '700' }],
+  ['fontSizePick', 'Aא'],
+  ['colorPick', '🎨'],
+  ['hilitePick', '🖍️'],
+  [actions.insertBulletsList, '•≡'],
+  [actions.insertOrderedList, '1≡'],
+  [actions.checkboxList, '☑'],
+  [actions.alignRight, '⇥'],
+  [actions.alignCenter, '↔'],
+  [actions.alignLeft, '⇤'],
+  [actions.undo, '↶'],
+  [actions.redo, '↷'],
+];
+
 const FONT_SIZES: [1 | 2 | 3 | 4 | 5 | 6 | 7, string][] = [
   [2, 'קטן'],
   [3, 'רגיל'],
@@ -229,9 +247,21 @@ export function NoteEditor({
   const ref = useRef<RichEditor>(null);
   const [pick, setPick] = useState<'size' | 'color' | 'hilite' | null>(null);
 
-  const glyph = (t: string, extra?: TextStyle) => ({ tintColor }: { tintColor?: string }) => (
-    <Text style={[styles.tool, { color: tintColor }, extra]}>{t}</Text>
-  );
+  const [selected, setSelected] = useState<string[]>([]);
+  useEffect(() => {
+    const ed: any = ref.current;
+    ed?.registerToolbar?.((items: any[]) => setSelected(items.map((x) => (typeof x === 'string' ? x : x?.type)).filter(Boolean)));
+  }, []);
+
+  const press = (action: string) => {
+    const ed: any = ref.current;
+    if (!ed) return;
+    if (action === 'fontSizePick') return setPick(pick === 'size' ? null : 'size');
+    if (action === 'colorPick') return setPick(pick === 'color' ? null : 'color');
+    if (action === 'hilitePick') return setPick(pick === 'hilite' ? null : 'hilite');
+    ed.showAndroidKeyboard?.();
+    ed.sendAction(action, 'result');
+  };
 
   return (
     <View style={fill ? styles.fillWrap : styles.editorWrap}>
@@ -287,52 +317,22 @@ export function NoteEditor({
         </View>
       ) : null}
       <View style={styles.toolRow}>
-        <View style={styles.flex1}>
-        <RichToolbar
-          editor={ref}
-          style={styles.toolbar}
-          iconTint={c.text}
-          selectedIconTint={c.onAccent}
-          selectedButtonStyle={styles.toolOn}
-          actions={[
-            actions.setBold,
-            actions.setItalic,
-            actions.setUnderline,
-            actions.setStrikethrough,
-            'fontSizePick',
-            'colorPick',
-            'hilitePick',
-            actions.insertBulletsList,
-            actions.insertOrderedList,
-            actions.checkboxList,
-            actions.alignRight,
-            actions.alignCenter,
-            actions.alignLeft,
-            actions.undo,
-            actions.redo,
-          ]}
-          iconMap={{
-            [actions.setBold]: glyph('B', { fontWeight: '900' }),
-            [actions.setItalic]: glyph('I', { fontStyle: 'italic', fontWeight: '700' }),
-            [actions.setUnderline]: glyph('U', { textDecorationLine: 'underline', fontWeight: '700' }),
-            [actions.setStrikethrough]: glyph('S', { textDecorationLine: 'line-through', fontWeight: '700' }),
-            fontSizePick: glyph('Aא'),
-            colorPick: glyph('🎨'),
-            hilitePick: glyph('🖍️'),
-            [actions.insertBulletsList]: glyph('•≡'),
-            [actions.insertOrderedList]: glyph('1≡'),
-            [actions.checkboxList]: glyph('☑'),
-            [actions.alignRight]: glyph('⇥'),
-            [actions.alignCenter]: glyph('↔'),
-            [actions.alignLeft]: glyph('⇤'),
-            [actions.undo]: glyph('↶'),
-            [actions.redo]: glyph('↷'),
-          }}
-          fontSizePick={() => setPick(pick === 'size' ? null : 'size')}
-          colorPick={() => setPick(pick === 'color' ? null : 'color')}
-          hilitePick={() => setPick(pick === 'hilite' ? null : 'hilite')}
-        />
-        </View>
+        {/* Own toolbar: pell's RichToolbar is a horizontal FlatList, which crashes in RTL on RN 0.76
+            ("ListMetricsAggregator must be notified of list content layout"). */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always" style={styles.toolbar}>
+          {TOOLS.map(([action, label, extra]) => {
+            const on = selected.includes(action);
+            return (
+              <TouchableOpacity
+                key={action}
+                style={[styles.toolBtn, on && styles.toolOn]}
+                onPress={() => press(action)}
+              >
+                <Text style={[styles.tool, { color: on ? c.onAccent : c.text }, extra]}>{label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
         {trailing}
       </View>
 
@@ -355,10 +355,11 @@ const makeStyles = (c: Palette) => ({
   colorCheck: { fontSize: 14, fontWeight: '900' as const, color: c.text },
   fillWrap: { flex: 1, backgroundColor: c.noteInput },
   fillEditor: { flex: 1 },
-  toolRow: { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: c.subtle },
+  toolRow: { flexDirection: 'row' as const, alignItems: 'center' as const, backgroundColor: c.subtle, borderTopWidth: 1, borderTopColor: c.border },
   flex1: { flex: 1 },
   editorWrap: { borderRadius: 12, overflow: 'hidden' as const, borderWidth: 1, borderColor: c.border, marginBottom: 10 },
-  toolbar: { backgroundColor: c.subtle, height: 44, borderTopWidth: 1, borderTopColor: c.border },
+  toolbar: { flexGrow: 1, height: 46 },
+  toolBtn: { minWidth: 40, height: 40, marginVertical: 3, marginHorizontal: 2, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const },
   tool: { fontSize: 17, minWidth: 22, textAlign: 'center' as const },
   toolOn: { backgroundColor: c.accent, borderRadius: 8 },
   editor: { minHeight: 170 },
