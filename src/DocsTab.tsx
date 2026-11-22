@@ -172,6 +172,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const [renameText, setRenameText] = useState('');
   const [selected, setSelected] = useState<Set<string> | null>(null); // multi-select
   const [scanPick, setScanPick] = useState<{ uri: string; name: string } | null>(null);
+  const [newFolder, setNewFolder] = useState<string | null>(null); // name being typed
+  const [scanBusy, setScanBusy] = useState(false);
   const [width, setWidth] = useState(360);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -279,6 +281,22 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     }
   };
 
+  const createFolder = async () => {
+    const name = (newFolder ?? '').trim().replace(/[\\/:*?"<>|]/g, '');
+    if (!current || !name) return;
+    if (entries.some((e) => e.isDir && e.name === name)) {
+      Alert.alert('תיקייה חדשה', `כבר יש כאן תיקייה בשם "${name}".`);
+      return;
+    }
+    const uri = await GeoAlarm.createFolder(current.uri, name);
+    setNewFolder(null);
+    if (!uri) {
+      Alert.alert('תיקייה חדשה', 'לא הצלחתי ליצור את התיקייה. ייתכן שאין הרשאת כתיבה – נתק וחבר את התיקייה שוב.');
+      return;
+    }
+    refresh();
+  };
+
   const disconnect = (f: DocFolder) => {
     confirm('ניתוק תיקייה', `לנתק את "${f.name}"? הקבצים עצמם לא יימחקו.`, 'נתק', () => {
       GeoAlarm.releaseFolder(f.uri);
@@ -296,11 +314,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       return;
     }
     let r: { uri: string; pages: number } | null = null;
+    setScanBusy(true);
     try {
       r = await GeoAlarm.scanDocument();
     } catch (e: any) {
       Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (e?.message ?? ''));
       return;
+    } finally {
+      setScanBusy(false);
     }
     if (!r) return;
     const d = new Date();
@@ -723,6 +744,24 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       {folders.map((f) => (
         <MenuItem key={f.uri} styles={styles} label={`📂  ${f.name}`} onPress={() => scanPick && saveScan(scanPick.uri, scanPick.name, f)} />
       ))}
+      <Text style={styles.popupHint}>לשמירה בתת-תיקייה: היכנס אליה ולחץ "סרוק לכאן".</Text>
+    </PopupShell>
+  );
+
+  const newFolderPopup = (
+    <PopupShell visible={newFolder !== null} title="📁 תיקייה חדשה" onClose={() => setNewFolder(null)} yellow={false}>
+      <TextInput
+        style={[styles.input, { marginBottom: 12 }]}
+        placeholder="שם התיקייה"
+        placeholderTextColor={c.muted}
+        value={newFolder ?? ''}
+        onChangeText={setNewFolder}
+        autoFocus
+        onSubmitEditing={createFolder}
+      />
+      <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={createFolder}>
+        <Text style={styles.actionPrimaryText}>צור תיקייה</Text>
+      </TouchableOpacity>
     </PopupShell>
   );
 
@@ -744,6 +783,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
               <Text style={styles.actionText}>+ חבר תיקייה</Text>
             </TouchableOpacity>
           </View>
+          {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : null}
           <TextInput
             style={styles.input}
             placeholder="🔍 חיפוש בכל התיקיות"
@@ -833,12 +873,16 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
               <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={scan}>
                 <Text style={styles.actionPrimaryText}>📷 סרוק לכאן</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={styles.actionBtn} onPress={() => setNewFolder('')}>
+                <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
+              </TouchableOpacity>
               {path.length === 1 ? (
                 <TouchableOpacity style={styles.actionBtn} onPress={() => disconnect(current)}>
                   <Text style={styles.actionText}>נתק תיקייה</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
+            {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : null}
             <TextInput
               style={styles.input}
               placeholder="🔍 חיפוש בתיקייה"
@@ -873,6 +917,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       {selectBar}
       {menuPopup}
       {scanPopup}
+      {newFolderPopup}
     </View>
   );
 }
@@ -949,6 +994,7 @@ const makeStyles = (c: Palette) => ({
   },
   actionText: { fontSize: 14.5, fontWeight: '700' as const, color: c.text },
   actionPrimary: { backgroundColor: c.accent, borderColor: c.accent },
+  popupHint: { fontSize: 12.5, color: c.muted, marginTop: 10, lineHeight: 18 },
   actionPrimaryText: { fontSize: 15, fontWeight: '800' as const, color: c.onAccent },
   input: {
     backgroundColor: c.card,

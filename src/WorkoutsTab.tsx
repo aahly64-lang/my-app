@@ -35,6 +35,39 @@ export function extractUrl(text: string): string | null {
   return m ? m[0] : null;
 }
 
+export const EQUIPMENT = [
+  'משקל גוף',
+  'משקולות יד',
+  'מוט',
+  'מוט EZ',
+  'פלייט',
+  'קטלבל',
+  'סמית משין',
+  'כבלים',
+  'מכונה',
+  'ספסל',
+  'מתח / מקבילים',
+  'גומיות',
+  'TRX',
+  'כדור פיזיו',
+  'חבל קפיצה',
+];
+
+/** YouTube video title (no API key needed). */
+async function fetchYoutubeTitle(url: string): Promise<string | null> {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 6000);
+    const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(url)}`, { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return typeof j?.title === 'string' ? j.title : null;
+  } catch {
+    return null;
+  }
+}
+
 async function openVideo(url: string) {
   try {
     await Linking.openURL(url);
@@ -71,6 +104,13 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
   const [evUrl, setEvUrl] = useState('');
   const [evGroup, setEvGroup] = useState('');
   const [evSub, setEvSub] = useState('');
+  const [evNote, setEvNote] = useState('');
+  const [evTags, setEvTags] = useState<string[]>([]);
+  const [evFav, setEvFav] = useState(false);
+  const [origin, setOrigin] = useState<{ g: string; s: string } | null>(null); // where the edited video lives
+  const [filter, setFilter] = useState<string | null>(null); // 'fav' or an equipment tag (top level)
+  const [subFilter, setSubFilter] = useState<string | null>(null); // equipment tag inside a sub-group
+  const [titleBusy, setTitleBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -101,6 +141,10 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
   // The phone's back button goes up one level instead of leaving the app.
   useEffect(() => {
     const h = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (filter && !groupId) {
+        setFilter(null);
+        return true;
+      }
       if (subId) {
         setSubId(null);
         return true;
@@ -112,7 +156,7 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
       return false;
     });
     return () => h.remove();
-  }, [groupId, subId]);
+  }, [groupId, subId, filter]);
 
   /** Group chips + clickable path, shown at the top of levels 2 and 3. */
   const navBar = () => (
@@ -176,6 +220,28 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
     }
   }, [shared, sub, onSharedUsed]);
 
+  // Pasting a YouTube link fills in the video's name.
+  useEffect(() => {
+    const url = extractUrl(videoUrl);
+    if (!url || videoTitle.trim() || detectPlatform(url) !== 'youtube') return;
+    let live = true;
+    setTitleBusy(true);
+    const t = setTimeout(async () => {
+      const title = await fetchYoutubeTitle(url);
+      if (live) {
+        setTitleBusy(false);
+        if (title) setVideoTitle((cur) => cur || title);
+      }
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(t);
+      setTitleBusy(false);
+    };
+  }, [videoUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => setSubFilter(null), [subId]);
+
   const updateGroup = (id: string, fn: (g: WorkoutGroup) => WorkoutGroup) =>
     persist(groups.map((g) => (g.id === id ? fn(g) : g)));
 
@@ -197,14 +263,17 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
     setNewName('');
   };
 
-  const addVideo = () => {
+  const addVideo = async () => {
     if (!group || !sub) return;
     const url = (extractUrl(videoUrl) ?? videoUrl).trim();
     if (!url) {
       Alert.alert('חסר קישור', 'הדבק קישור לסרטון.');
       return;
     }
-    const item: WorkoutLink = { id: newId(), title: videoTitle.trim() || 'סרטון כושר', url, platform: detectPlatform(url) };
+    const platform = detectPlatform(url);
+    let title = videoTitle.trim();
+    if (!title && platform === 'youtube') title = (await fetchYoutubeTitle(url)) ?? '';
+    const item: WorkoutLink = { id: newId(), title: title || 'סרטון כושר', url, platform };
     updateSub(group.id, sub.id, (s) => ({ ...s, videos: [...s.videos, item] }));
     setVideoTitle('');
     setVideoUrl('');
@@ -248,13 +317,34 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
   };
 
   // ---------- video edit ----------
+  const locate = (id: string) => {
+    for (const g of groups) for (const s of g.subs) if (s.videos.some((v) => v.id === id)) return { g: g.id, s: s.id };
+    return null;
+  };
+
   const openEdit = (v: WorkoutLink) => {
+    const at = locate(v.id);
+    setOrigin(at);
     setEditing(v);
     setEvTitle(v.title);
     setEvUrl(v.url);
-    setEvGroup(groupId ?? '');
-    setEvSub(subId ?? '');
+    setEvGroup(at?.g ?? '');
+    setEvSub(at?.s ?? '');
+    setEvNote(v.note ?? '');
+    setEvTags(v.tags ?? []);
+    setEvFav(!!v.fav);
   };
+
+  /** Changes one video wherever it is. */
+  const patchVideo = (id: string, fn: (v: WorkoutLink) => WorkoutLink) =>
+    persist(
+      groups.map((g) => ({
+        ...g,
+        subs: g.subs.map((s) => (s.videos.some((v) => v.id === id) ? { ...s, videos: s.videos.map((v) => (v.id === id ? fn(v) : v)) } : s)),
+      }))
+    );
+
+  const toggleFav = (v: WorkoutLink) => patchVideo(v.id, (x) => ({ ...x, fav: !x.fav }));
 
   const saveVideo = () => {
     if (!editing) return;
@@ -263,15 +353,25 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
       Alert.alert('חסר קישור', 'הדבק קישור לסרטון.');
       return;
     }
-    const updated: WorkoutLink = { ...editing, title: evTitle.trim() || 'סרטון כושר', url, platform: detectPlatform(url) };
-    const moved = evGroup !== groupId || evSub !== subId;
+    const updated: WorkoutLink = {
+      ...editing,
+      title: evTitle.trim() || 'סרטון כושר',
+      url,
+      platform: detectPlatform(url),
+      note: evNote.trim() || undefined,
+      tags: evTags.length ? evTags : undefined,
+      fav: evFav || undefined,
+    };
+    const fromG = origin?.g ?? '';
+    const fromS = origin?.s ?? '';
+    const moved = !!evSub && (evGroup !== fromG || evSub !== fromS);
     persist(
       groups.map((g) => ({
         ...g,
         subs: g.subs.map((s) => {
           let videos = s.videos;
           if (moved) videos = videos.filter((v) => v.id !== updated.id);
-          if (!moved && s.id === subId) videos = videos.map((v) => (v.id === updated.id ? updated : v));
+          if (!moved && s.id === fromS) videos = videos.map((v) => (v.id === updated.id ? updated : v));
           if (moved && g.id === evGroup && s.id === evSub) videos = [...videos, updated];
           return { ...s, videos };
         }),
@@ -281,10 +381,10 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
   };
 
   const deleteVideo = () => {
-    if (!editing || !group || !sub) return;
+    if (!editing) return;
     const v = editing;
     confirm('מחיקת סרטון', `למחוק את "${v.title}"?`, 'מחק', () => {
-      updateSub(group.id, sub.id, (s) => ({ ...s, videos: s.videos.filter((x) => x.id !== v.id) }));
+      persist(groups.map((g) => ({ ...g, subs: g.subs.map((s) => ({ ...s, videos: s.videos.filter((x) => x.id !== v.id) })) })));
       setEditing(null);
     });
   };
@@ -338,13 +438,12 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
     </ScaleDecorator>
   );
 
-  const renderVideo = ({ item, drag, isActive }: RenderItemParams<WorkoutLink>) => {
+  const videoRow = (item: WorkoutLink, drag: (() => void) | null, isActive: boolean, where?: string) => {
     const yt = item.platform === 'youtube' ? youtubeId(item.url) : null;
     return (
-      <ScaleDecorator>
         <View style={[styles.listRow, isActive && styles.listRowActive]}>
-          <Handle drag={drag} />
-          <TouchableOpacity style={styles.videoMain} onPress={() => openVideo(item.url)} onLongPress={drag}>
+          {drag ? <Handle drag={drag} /> : null}
+          <TouchableOpacity style={styles.videoMain} onPress={() => openVideo(item.url)} onLongPress={drag ?? (() => openEdit(item))}>
             {yt ? (
               <Image source={{ uri: `https://img.youtube.com/vi/${yt}/mqdefault.jpg` }} style={styles.thumb} />
             ) : (
@@ -356,18 +455,60 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
               <Text style={styles.itemTitle} numberOfLines={2}>
                 {item.title}
               </Text>
-              <Text style={styles.itemSub}>
-                {item.platform === 'youtube' ? 'YouTube' : item.platform === 'facebook' ? 'Facebook' : 'קישור'} · לחץ לצפייה
+              <Text style={styles.itemSub} numberOfLines={1}>
+                {where ?? (item.platform === 'youtube' ? 'YouTube' : item.platform === 'facebook' ? 'Facebook' : 'קישור')}
+                {item.tags?.length ? ` · ${item.tags.join(', ')}` : ''}
               </Text>
+              {item.note ? (
+                <Text style={[styles.itemSub, { color: c.text2 }]} numberOfLines={2}>
+                  📝 {item.note}
+                </Text>
+              ) : null}
             </View>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => openEdit(item)} hitSlop={8}>
-            <Text style={styles.iconBtnText}>✏️</Text>
-          </TouchableOpacity>
+          <View>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => toggleFav(item)} hitSlop={6}>
+              <Text style={[styles.iconBtnText, !item.fav && { opacity: 0.35 }]}>{item.fav ? '⭐' : '☆'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.iconBtn} onPress={() => openEdit(item)} hitSlop={6}>
+              <Text style={styles.iconBtnText}>✏️</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </ScaleDecorator>
     );
   };
+
+  const renderVideo = ({ item, drag, isActive }: RenderItemParams<WorkoutLink>) => (
+    <ScaleDecorator>{videoRow(item, drag, isActive)}</ScaleDecorator>
+  );
+
+  // All videos with their place, for favorites and equipment filters.
+  const allVideos = groups.flatMap((g) => g.subs.flatMap((s) => s.videos.map((v) => ({ v, where: `${g.name} › ${s.name}` }))));
+  const usedTags = EQUIPMENT.filter((t) => allVideos.some(({ v }) => v.tags?.includes(t)));
+  const favCount = allVideos.filter(({ v }) => v.fav).length;
+
+  const filterChips = () =>
+    favCount || usedTags.length ? (
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.navChips} keyboardShouldPersistTaps="handled">
+        {favCount ? (
+          <TouchableOpacity
+            style={[styles.chip, styles.chipSpaced, filter === 'fav' && styles.chipActive]}
+            onPress={() => setFilter(filter === 'fav' ? null : 'fav')}
+          >
+            <Text style={[styles.chipText, filter === 'fav' && styles.chipTextActive]}>⭐ מועדפים ({favCount})</Text>
+          </TouchableOpacity>
+        ) : null}
+        {usedTags.map((t) => (
+          <TouchableOpacity
+            key={t}
+            style={[styles.chip, styles.chipSpaced, filter === t && styles.chipActive]}
+            onPress={() => setFilter(filter === t ? null : t)}
+          >
+            <Text style={[styles.chipText, filter === t && styles.chipTextActive]}>{t}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    ) : null;
 
   const sharedBanner = shared ? (
     <View style={styles.sharedBanner}>
@@ -398,10 +539,10 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
     return (
       <View style={styles.flex1}>
         <DraggableFlatList
-          data={sub.videos}
+          data={subFilter ? sub.videos.filter((v) => v.tags?.includes(subFilter)) : sub.videos}
           keyExtractor={(v) => v.id}
           renderItem={renderVideo}
-          onDragEnd={({ data }) => updateSub(group.id, sub.id, (s) => ({ ...s, videos: data }))}
+          onDragEnd={({ data }) => !subFilter && updateSub(group.id, sub.id, (s) => ({ ...s, videos: data }))}
           contentContainerStyle={styles.deskContent}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={
@@ -423,19 +564,19 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
               <View style={styles.card}>
                 <TextInput
                   style={styles.input}
-                  placeholder="שם התרגיל / הסרטון"
-                  placeholderTextColor={c.muted}
-                  value={videoTitle}
-                  onChangeText={setVideoTitle}
-                />
-                <TextInput
-                  style={styles.input}
                   placeholder="קישור ליוטיוב או פייסבוק"
                   placeholderTextColor={c.muted}
                   value={videoUrl}
                   onChangeText={setVideoUrl}
                   autoCapitalize="none"
                   keyboardType="url"
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder={titleBusy ? 'מביא את שם הסרטון…' : 'שם התרגיל / הסרטון (ביוטיוב מתמלא לבד)'}
+                  placeholderTextColor={c.muted}
+                  value={videoTitle}
+                  onChangeText={setVideoTitle}
                 />
                 <TouchableOpacity style={styles.darkBtn} onPress={addVideo}>
                   <Text style={styles.whiteBtnText}>שמור קישור</Text>
@@ -444,6 +585,22 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
                   טיפ: ביוטיוב או בפייסבוק לחץ "שיתוף" ובחר באפליקציה הזו. לסידור מחדש החזק את ☰ וגרור.
                 </Text>
               </View>
+              {(() => {
+                const tags = EQUIPMENT.filter((t) => sub.videos.some((v) => v.tags?.includes(t)));
+                return tags.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.navChips} keyboardShouldPersistTaps="handled">
+                    {tags.map((t) => (
+                      <TouchableOpacity
+                        key={t}
+                        style={[styles.chip, styles.chipSpaced, styles.chipSmall, subFilter === t && styles.chipActive]}
+                        onPress={() => setSubFilter(subFilter === t ? null : t)}
+                      >
+                        <Text style={[styles.chipText, subFilter === t && styles.chipTextActive]}>{t}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                ) : null;
+              })()}
               {sub.videos.length === 0 ? <Text style={styles.emptyText}>עדיין אין סרטונים כאן.</Text> : null}
             </View>
           }
@@ -492,6 +649,28 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
     );
   }
 
+  // ---------- level 1: favorites / equipment filter ----------
+  const filterLive = filter === 'fav' ? favCount > 0 : !!filter && usedTags.includes(filter);
+  if (filter && filterLive) {
+    const list = allVideos.filter(({ v }) => (filter === 'fav' ? v.fav : v.tags?.includes(filter)));
+    return (
+      <View style={styles.flex1}>
+        <ScrollView contentContainerStyle={styles.deskContent} keyboardShouldPersistTaps="handled">
+          <Text style={styles.sectionTitle}>קבוצות שרירים</Text>
+          {filterChips()}
+          <Text style={styles.label}>
+            {filter === 'fav' ? '⭐ מועדפים' : `ציוד: ${filter}`} · {list.length} סרטונים
+          </Text>
+          {list.map(({ v, where }) => (
+            <View key={v.id}>{videoRow(v, null, false, where)}</View>
+          ))}
+          {list.length === 0 ? <Text style={styles.emptyText}>אין סרטונים.</Text> : null}
+        </ScrollView>
+        {renderPopups()}
+      </View>
+    );
+  }
+
   // ---------- level 1: groups ----------
   return (
     <View style={styles.flex1}>
@@ -505,6 +684,7 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
         ListHeaderComponent={
           <View>
             <Text style={styles.sectionTitle}>קבוצות שרירים</Text>
+            {filterChips()}
             {sharedBanner}
             {addRow('קבוצה חדשה', addGroup)}
             <Text style={styles.hintText}>לסידור מחדש: החזק את ☰ וגרור למקום הרצוי.</Text>
@@ -552,6 +732,32 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
             autoCapitalize="none"
             keyboardType="url"
           />
+          <TextInput
+            style={[styles.input, { minHeight: 70, textAlignVertical: 'top' }]}
+            value={evNote}
+            onChangeText={setEvNote}
+            placeholder="הערה אישית (משקל, סטים, דגשים...)"
+            placeholderTextColor={c.muted}
+            multiline
+          />
+          <TouchableOpacity style={[styles.chip, styles.chipSpaced, { alignSelf: 'flex-start' }, evFav && styles.chipActive]} onPress={() => setEvFav(!evFav)}>
+            <Text style={[styles.chipText, evFav && styles.chipTextActive]}>{evFav ? '⭐ במועדפים' : '☆ הוסף למועדפים'}</Text>
+          </TouchableOpacity>
+          <Text style={styles.label}>ציוד:</Text>
+          <View style={styles.chipsWrapRow}>
+            {EQUIPMENT.map((t) => {
+              const on = evTags.includes(t);
+              return (
+                <TouchableOpacity
+                  key={t}
+                  style={[styles.chip, styles.chipSpaced, styles.chipSmall, on && styles.chipActive]}
+                  onPress={() => setEvTags(on ? evTags.filter((x) => x !== t) : [...evTags, t])}
+                >
+                  <Text style={[styles.chipText, on && styles.chipTextActive]}>{t}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
           <Text style={styles.label}>קבוצה:</Text>
           <View style={styles.chipsWrapRow}>
             {groups.map((g) => (

@@ -14,7 +14,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
-import { Palette, ThemeMode, cardShadow, useTheme, withFonts } from './theme';
+import { ACCENTS, Palette, ThemeMode, cardShadow, useTheme, withFonts } from './theme';
 import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
 
 const SOUND_ROWS: [SoundKind, string][] = [
@@ -31,6 +31,8 @@ interface Props {
   onImport: () => void;
   themeMode: ThemeMode;
   onThemeMode: (m: ThemeMode) => void;
+  accent: string;
+  onAccent: (k: string) => void;
 }
 
 function useStyles() {
@@ -115,8 +117,9 @@ function Step({
   );
 }
 
-export default function SetupScreen({ visible, onClose, onExport, onImport, themeMode, onThemeMode }: Props) {
+export default function SetupScreen({ visible, onClose, onExport, onImport, themeMode, onThemeMode, accent, onAccent }: Props) {
   const styles = useStyles();
+  const c = useTheme();
   const [status, setStatus] = useState<Status>(EMPTY);
   const [sounds, setSounds] = useState<SoundSettings>({});
 
@@ -214,6 +217,21 @@ export default function SetupScreen({ visible, onClose, onExport, onImport, them
                 <Text style={[styles.themeBtnText, themeMode === m && styles.themeBtnTextOn]}>{label}</Text>
               </TouchableOpacity>
             ))}
+          </View>
+          <Text style={styles.subSection}>צבע ראשי</Text>
+          <View style={styles.accentRow}>
+            {ACCENTS.map((a) => {
+              const col = c.dark ? a.dark.accent : a.light.accent;
+              const on = accent === a.key;
+              return (
+                <TouchableOpacity key={a.key} style={styles.accentItem} onPress={() => onAccent(a.key)}>
+                  <View style={[styles.accentDot, { backgroundColor: col }, on && styles.accentDotOn]}>
+                    {on ? <Text style={[styles.accentCheck, { color: c.dark ? a.dark.onAccent : a.light.onAccent }]}>✓</Text> : null}
+                  </View>
+                  <Text style={[styles.accentName, on && styles.accentNameOn]}>{a.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
           <Text style={styles.section}>הרשאות לשעון המעורר לפי מיקום</Text>
@@ -429,6 +447,14 @@ const makeStyles = (c: Palette) =>
         justifyContent: 'center',
       },
       themeBtnOn: { backgroundColor: c.accent },
+      subSection: { fontSize: 14, fontWeight: '700', color: c.muted, marginTop: 14, marginBottom: 8 },
+      accentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+      accentItem: { width: '18%', alignItems: 'center', marginBottom: 8 },
+      accentDot: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.border },
+      accentDotOn: { borderWidth: 3, borderColor: c.text },
+      accentCheck: { fontSize: 16, fontWeight: '900' },
+      accentName: { fontSize: 11, color: c.muted, marginTop: 3 },
+      accentNameOn: { color: c.text, fontWeight: '700' },
       themeBtnText: { fontWeight: '500', color: c.muted, fontSize: 14 },
       themeBtnTextOn: { color: c.onAccent, fontWeight: '700' },
     })

@@ -50,6 +50,7 @@ type GeoAlarmNative = {
   deleteDocument(uri: string): boolean;
   shareDocuments(uris: string[], mimes: string[]): boolean;
   copyIntoFolder(src: string, treeUri: string, name: string, mime: string): Promise<string | null>;
+  createFolder(parentUri: string, name: string): Promise<string | null>;
   scanDocument(): Promise<{ uri: string; pages: number } | null>;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
   stopAlarm(): void;
@@ -136,6 +137,13 @@ export const GeoAlarm = {
     }
   },
   /** Opens Google's document scanner. Throws with a Hebrew message if it isn't available. */
+  createFolder: async (parentUri: string, name: string): Promise<string | null> => {
+    try {
+      return native ? await native.createFolder(parentUri, name) : null;
+    } catch {
+      return null;
+    }
+  },
   scanDocument: async (): Promise<{ uri: string; pages: number } | null> => {
     if (!native) throw new Error('לא זמין במכשיר הזה');
     return native.scanDocument();

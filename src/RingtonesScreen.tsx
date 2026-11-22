@@ -547,12 +547,22 @@ function Editor({
     setDraft(next);
   };
 
+  // Scrubbing pauses the music; letting go resumes it from the new point.
+  const wasPlaying = useRef(false);
+  const scrubStart = () => {
+    if (playingRef.current) {
+      wasPlaying.current = true;
+      onStop();
+    }
+  };
+
   const moveCursor = (ms: number, restart: boolean) => {
     const d = ref.current;
     const v = Math.max(0, Math.min(ms, d.duration));
     setCursor(v);
-    if (restart && playingRef.current) {
-      if (v >= d.start && v < d.end - 200) onPlayFrom(v);
+    if (restart && (playingRef.current || wasPlaying.current)) {
+      wasPlaying.current = false;
+      if (v < d.end - 200) onPlayFrom(v);
       else onStop();
     }
   };
@@ -627,7 +637,7 @@ function Editor({
           <Text style={styles.zoomText}>{view ? '↔️ כל השיר' : '🔍 הגדל'}</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.hintTight}>גע בגל כדי להזיז את הסמן הלבן (נקודת הניגון). גרור את הלשוניות כדי לקבוע התחלה וסוף.</Text>
+      <Text style={styles.hintTight}>גע בגל או גרור עליו כדי להזיז את הסמן הלבן, גם בזמן ניגון. גרור את הלשוניות כדי לקבוע התחלה וסוף.</Text>
       <Wave
         wave={wave}
         duration={draft.duration}
@@ -641,6 +651,7 @@ function Editor({
         warn={warn}
         onMove={apply}
         onCursor={moveCursor}
+        onScrubStart={scrubStart}
         styles={styles}
       />
       <View style={styles.timesRow}>
@@ -851,6 +862,7 @@ function Wave({
   warn,
   onMove,
   onCursor,
+  onScrubStart,
   styles,
 }: {
   wave: number[] | null;
@@ -865,6 +877,7 @@ function Wave({
   warn: boolean;
   onMove: (which: 'start' | 'end', ms: number) => void;
   onCursor: (ms: number, restart: boolean) => void;
+  onScrubStart: () => void;
   styles: ReturnType<typeof makeStyles>;
 }) {
   const [width, setWidth] = useState(1);
@@ -874,8 +887,8 @@ function Wave({
   const xOf = (ms: number) => ((ms - from) / span) * width;
 
   // Gesture state lives in refs so the gestures can be created once.
-  const live = useRef({ start, end, cursor, width, span, from, onMove, onCursor });
-  live.current = { start, end, cursor, width, span, from, onMove, onCursor };
+  const live = useRef({ start, end, cursor, width, span, from, onMove, onCursor, onScrubStart });
+  live.current = { start, end, cursor, width, span, from, onMove, onCursor, onScrubStart };
   const base = useRef(0);
 
   const makePan = (which: 'start' | 'end') =>
@@ -904,6 +917,7 @@ function Wave({
       .hitSlop({ horizontal: 12, vertical: 8 })
       .onBegin(() => {
         cursorBase.current = live.current.cursor;
+        live.current.onScrubStart();
       })
       .onUpdate((e) => {
         const L = live.current;
@@ -912,22 +926,48 @@ function Wave({
         setDragCur(v);
         L.onCursor(v, false);
       })
-      .onEnd((e) => {
+      .onFinalize((e) => {
         const L = live.current;
         const dx = RTL ? -e.translationX : e.translationX;
         L.onCursor(Math.max(0, cursorBase.current + (dx / L.width) * L.span), true);
-      })
-      .onFinalize(() => setDragCur(null))
-  ).current;
-  const tapWave = useRef(
-    Gesture.Tap()
-      .runOnJS(true)
-      .onEnd((e) => {
-        const L = live.current;
-        const x = RTL ? L.width - e.x : e.x;
-        L.onCursor(L.from + (x / L.width) * L.span, true);
+        setDragCur(null);
       })
   ).current;
+  // Absolute position on the wave -> time.
+  const msAtX = (ex: number) => {
+    const L = live.current;
+    const x = Math.max(0, Math.min(L.width, RTL ? L.width - ex : ex));
+    return L.from + (x / L.width) * L.span;
+  };
+  const lastScrub = useRef(0);
+  const scrubbing = useRef(false);
+  const scrubWave = Gesture.Pan()
+    .runOnJS(true)
+    .activeOffsetX([-6, 6])
+    .failOffsetY([-14, 14])
+    .onStart((e) => {
+      scrubbing.current = true;
+      live.current.onScrubStart();
+      lastScrub.current = msAtX(e.x);
+      setDragCur(lastScrub.current);
+      live.current.onCursor(lastScrub.current, false);
+    })
+    .onUpdate((e) => {
+      lastScrub.current = msAtX(e.x);
+      setDragCur(lastScrub.current);
+      live.current.onCursor(lastScrub.current, false);
+    })
+    .onFinalize(() => {
+      if (scrubbing.current) live.current.onCursor(lastScrub.current, true);
+      scrubbing.current = false;
+      setDragCur(null);
+    });
+  const tapWave = Gesture.Tap()
+    .runOnJS(true)
+    .onEnd((e) => {
+      live.current.onCursor(msAtX(e.x), true);
+    });
+  const waveGesture = useRef(Gesture.Race(scrubWave, tapWave)).current;
 
   // Bars for the visible window
   const bars = Math.max(10, Math.floor(width / (BAR_W + BAR_GAP)));
@@ -958,7 +998,7 @@ function Wave({
 
   return (
     <View style={styles.waveOuter}>
-      <GestureDetector gesture={tapWave}>
+      <GestureDetector gesture={waveGesture}>
         <View style={styles.waveBox} onLayout={(e: LayoutChangeEvent) => setWidth(Math.max(1, e.nativeEvent.layout.width))}>
           {wave === null ? (
             <View style={styles.waveLoading}>

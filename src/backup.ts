@@ -13,6 +13,7 @@ import {
   WorkoutGroup,
   localDateString,
   DocMeta,
+  Journal,
 } from './storage';
 
 export interface BackupData {
@@ -26,6 +27,8 @@ export interface BackupData {
   docMeta?: Record<string, DocMeta>;
   sounds: SoundSettings;
   themeMode?: string;
+  accent?: string;
+  journals?: Journal[];
 }
 
 const BACKUP_APP_ID = 'avi-personal-board';
@@ -74,6 +77,8 @@ export async function pickBackup(): Promise<BackupData | null> {
       docMeta: parsed.docMeta && typeof parsed.docMeta === 'object' ? parsed.docMeta : undefined,
       sounds: parsed.sounds && typeof parsed.sounds === 'object' ? parsed.sounds : {},
       themeMode: typeof parsed.themeMode === 'string' ? parsed.themeMode : undefined,
+      accent: typeof parsed.accent === 'string' ? parsed.accent : undefined,
+      journals: Array.isArray(parsed.journals) ? parsed.journals : undefined,
     };
   } catch {
     Alert.alert('השחזור נכשל', 'לא הצלחתי לקרוא את קובץ הגיבוי.');

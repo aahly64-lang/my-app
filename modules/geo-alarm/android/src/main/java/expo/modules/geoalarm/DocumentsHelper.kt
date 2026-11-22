@@ -15,9 +15,27 @@ import java.io.FileOutputStream
 
 /** Lists and opens files inside folders the user granted through the system folder picker. */
 object DocumentsHelper {
-  private fun rootDocId(ctx: Context, uri: Uri): String {
-    return if (DocumentsContract.isDocumentUri(ctx, uri)) DocumentsContract.getDocumentId(uri)
+  /**
+   * The folder a uri points at: a sub-folder (tree/<root>/document/<id>) or the connected root (tree/<root>).
+   * Decided from the uri itself — DocumentsContract.isDocumentUri() needs package visibility of the
+   * provider and wrongly answered "root" for sub-folders (scans landed in the root folder).
+   */
+  private fun rootDocId(@Suppress("UNUSED_PARAMETER") ctx: Context, uri: Uri): String {
+    val seg = uri.pathSegments
+    return if (seg.size >= 4 && seg[0] == "tree" && seg[2] == "document") DocumentsContract.getDocumentId(uri)
     else DocumentsContract.getTreeDocumentId(uri)
+  }
+
+  /** Creates a sub-folder; returns its uri (usable like any folder uri), or null. */
+  fun createFolder(ctx: Context, parentUri: String, name: String): String? {
+    return try {
+      val tree = Uri.parse(parentUri)
+      val parent = DocumentsContract.buildDocumentUriUsingTree(tree, rootDocId(ctx, tree))
+      DocumentsContract.createDocument(ctx.contentResolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, name)
+        ?.toString()
+    } catch (e: Exception) {
+      null
+    }
   }
 
   fun list(ctx: Context, uriStr: String): List<Map<String, Any?>> {

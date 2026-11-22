@@ -29,7 +29,9 @@ import DocsTab from './src/DocsTab';
 import { syncGeofences, MIN_RADIUS_M } from './src/geoTask';
 import { exportBackup, pickBackup } from './src/backup';
 import { useAppStyles } from './src/appStyles';
-import { DARK, LIGHT, ThemeContext, ThemeMode, useTheme } from './src/theme';
+import { ThemeContext, ThemeMode, paletteFor, useTheme } from './src/theme';
+import StopwatchCard from './src/Stopwatch';
+import { NoteColorPicker, NoteEditor, RichText, htmlToPlain, noteBg, plainToHtml } from './src/richNote';
 import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './src/ui';
 import { DAY_LETTERS, daysSummary, displayYMD, endOfDay, hhmm, parseHHMM, parseYMD, pickTimeWheels } from './src/pickers';
 import {
@@ -67,6 +69,10 @@ import {
   loadSounds,
   loadTasks,
   loadThemeMode,
+  loadAccent,
+  saveAccent,
+  loadJournals,
+  saveJournals,
   loadTimer,
   localDateString,
   markSetupSeen,
@@ -212,6 +218,20 @@ function reminderTag(n: StickyNote): string | null {
 
 // ---------- App ----------
 
+const LIST_PREVIEW = 3;
+
+function ExpandToggle({ count, open, onToggle }: { count: number; open: boolean; onToggle: () => void }) {
+  const c = useTheme();
+  if (count <= LIST_PREVIEW) return null;
+  return (
+    <TouchableOpacity onPress={onToggle} style={{ paddingVertical: 10, alignItems: 'center' }} hitSlop={6}>
+      <Text style={{ color: c.link, fontFamily: 'Heebo_600SemiBold', fontSize: 14 }}>
+        {open ? '▴ הצג פחות' : `▾ הצג הכל (${count})`}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
 export default function App() {
   const system = useColorScheme();
   const [themeMode, setThemeModeState] = useState<ThemeMode>('auto');
@@ -222,11 +242,19 @@ export default function App() {
     setThemeModeState(m);
     saveThemeMode(m);
   };
+  const [accent, setAccentState] = useState('yellow');
+  useEffect(() => {
+    loadAccent().then(setAccentState);
+  }, []);
+  const setAccent = (k: string) => {
+    setAccentState(k);
+    saveAccent(k);
+  };
   const dark = themeMode === 'dark' || (themeMode === 'auto' && system === 'dark');
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeContext.Provider value={dark ? DARK : LIGHT}>
-        <AppInner themeMode={themeMode} setThemeMode={setThemeMode} dark={dark} />
+      <ThemeContext.Provider value={paletteFor(dark, accent)}>
+        <AppInner themeMode={themeMode} setThemeMode={setThemeMode} dark={dark} accent={accent} setAccent={setAccent} />
       </ThemeContext.Provider>
     </GestureHandlerRootView>
   );
@@ -236,10 +264,14 @@ function AppInner({
   themeMode,
   setThemeMode,
   dark,
+  accent,
+  setAccent,
 }: {
   themeMode: ThemeMode;
   setThemeMode: (m: ThemeMode) => void;
   dark: boolean;
+  accent: string;
+  setAccent: (k: string) => void;
 }) {
   const styles = useAppStyles();
   const c = useTheme();
@@ -253,17 +285,24 @@ function AppInner({
   const [bgLocationOk, setBgLocationOk] = useState(true);
   const [geoLog, setGeoLog] = useState<GeoLogEntry[] | null>(null);
   const [ringtonesVisible, setRingtonesVisible] = useState(false);
+  const [showAllAlarms, setShowAllAlarms] = useState(false);
+  const [showAllAreas, setShowAllAreas] = useState(false);
 
   // --- notes ---
   const [notes, setNotes] = useState<StickyNote[]>([WELCOME_NOTE]);
   const [createVisible, setCreateVisible] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newBody, setNewBody] = useState('');
+  const [newHtml, setNewHtml] = useState('');
+  const [newColor, setNewColor] = useState('default');
+  const [editorKey, setEditorKey] = useState(0);
   const [newReminder, setNewReminder] = useState<ReminderValue>(emptyReminder());
 
   const [selectedNote, setSelectedNote] = useState<StickyNote | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editBody, setEditBody] = useState('');
+  const [editHtml, setEditHtml] = useState('');
+  const [editColor, setEditColor] = useState('default');
   const [editReminder, setEditReminder] = useState<ReminderValue>(emptyReminder());
 
   // --- alarm clocks ---
@@ -430,6 +469,9 @@ function AppInner({
   const openCreateNote = () => {
     setNewTitle('');
     setNewBody('');
+    setNewHtml('');
+    setNewColor('default');
+    setEditorKey((k) => k + 1);
     setNewReminder(emptyReminder());
     setCreateVisible(true);
   };
@@ -446,6 +488,8 @@ function AppInner({
       id,
       title: newTitle.trim() || 'פתק צהוב',
       body: newBody.trim(),
+      html: newBody.trim() ? newHtml : undefined,
+      color: newColor === 'default' ? undefined : newColor,
       updatedAt: new Date().toISOString(),
       ...noteReminderFields(newReminder),
     };
@@ -457,6 +501,9 @@ function AppInner({
     setSelectedNote(note);
     setEditTitle(note.title);
     setEditBody(note.body);
+    setEditHtml(note.html ?? plainToHtml(note.body));
+    setEditColor(note.color ?? 'default');
+    setEditorKey((k) => k + 1);
     setEditReminder(reminderFromNote(note));
   };
 
@@ -477,6 +524,8 @@ function AppInner({
               ...n,
               title: editTitle.trim() || 'פתק צהוב',
               body: editBody.trim(),
+              html: editBody.trim() ? editHtml : undefined,
+              color: editColor === 'default' ? undefined : editColor,
               updatedAt: new Date().toISOString(),
               ...noteReminderFields(editReminder),
             }
@@ -805,6 +854,8 @@ function AppInner({
         docMeta: await loadDocMeta(),
         sounds: await loadSounds(),
         themeMode,
+        accent,
+        journals: await loadJournals(),
       });
     } catch {
       Alert.alert('הגיבוי נכשל', 'לא הצלחתי ליצור את קובץ הגיבוי.');
@@ -839,6 +890,8 @@ function AppInner({
         if (data.docMeta) await saveDocMeta(data.docMeta);
         await saveSounds(data.sounds);
         if (data.themeMode) setThemeMode(data.themeMode as ThemeMode);
+        if (data.accent) setAccent(data.accent);
+        if (data.journals) await saveJournals(data.journals);
         cancelRing(TIMER_RING_ID);
         setTimer((t) => ({ ...t, endAt: null, pausedRemainingSec: null, notificationId: null }));
         await persistAreas(data.areas, data.areas.map((a) => a.id));
@@ -931,7 +984,11 @@ function AppInner({
               {sortedNotes.map((note) => (
                 <TouchableOpacity
                   key={note.id}
-                  style={[styles.yellowNote, note.done && styles.noteDone]}
+                  style={[
+                    styles.yellowNote,
+                    noteBg(note.color, c) ? { backgroundColor: noteBg(note.color, c) } : null,
+                    note.done && styles.noteDone,
+                  ]}
                   onPress={() => openNote(note)}
                   activeOpacity={0.8}
                 >
@@ -947,9 +1004,13 @@ function AppInner({
                       {note.done ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
                     </TouchableOpacity>
                   </View>
-                  <Text style={[styles.noteBody, note.done && styles.mutedText]} numberOfLines={4}>
-                    {note.body}
-                  </Text>
+                  {note.html ? (
+                    <RichText html={note.html} style={[styles.noteBody, note.done ? styles.mutedText : {}]} numberOfLines={6} />
+                  ) : (
+                    <Text style={[styles.noteBody, note.done && styles.mutedText]} numberOfLines={4}>
+                      {note.body}
+                    </Text>
+                  )}
                   {reminderTag(note) ? <Text style={styles.scheduleTag}>{reminderTag(note)}</Text> : null}
                   <DocChips
                     docs={note.docs}
@@ -988,7 +1049,7 @@ function AppInner({
                 </TouchableOpacity>
               </View>
               {alarms.length === 0 ? <Text style={styles.emptyText}>עדיין אין שעונים מעוררים.</Text> : null}
-              {alarms.map((a) => (
+              {(showAllAlarms ? alarms : alarms.slice(-LIST_PREVIEW)).map((a) => (
                 <View key={a.id} style={styles.alarmItem}>
                   <TouchableOpacity
                     style={styles.flex1}
@@ -1011,6 +1072,7 @@ function AppInner({
                 thumbColor="#FFFFFF" value={a.enabled} onValueChange={() => toggleAlarm(a)} />
                 </View>
               ))}
+              <ExpandToggle count={alarms.length} open={showAllAlarms} onToggle={() => setShowAllAlarms((v) => !v)} />
             </View>
 
             <View style={styles.card}>
@@ -1048,7 +1110,7 @@ function AppInner({
                 <Text style={styles.grayBtnText}>📋 יומן מיקום</Text>
               </TouchableOpacity>
 
-              {areas.map((a) => (
+              {(showAllAreas ? areas : areas.slice(-LIST_PREVIEW)).map((a) => (
                 <View key={a.id} style={styles.areaItem}>
                   <TouchableOpacity style={styles.flex1} onPress={() => editArea(a)}>
                     <Text style={[styles.itemTitle, !a.enabled && styles.mutedText]}>{a.label}</Text>
@@ -1068,6 +1130,7 @@ function AppInner({
                 thumbColor="#FFFFFF" value={a.enabled} onValueChange={() => toggleArea(a)} />
                 </View>
               ))}
+              <ExpandToggle count={areas.length} open={showAllAreas} onToggle={() => setShowAllAreas((v) => !v)} />
             </View>
 
             <View style={styles.card}>
@@ -1106,6 +1169,8 @@ function AppInner({
               </View>
               <Text style={styles.hintText}>בסיום הטיימר יצלצל צלצול מלא, גם אם האפליקציה סגורה.</Text>
             </View>
+
+            <StopwatchCard key={`sw-${dataVersion}`} />
           </View>
         )}
       </ScrollView>
@@ -1114,13 +1179,16 @@ function AppInner({
       {/* ---------- popup: new note ---------- */}
       <PopupShell visible={createVisible} title="פתק צהוב חדש" onClose={() => setCreateVisible(false)}>
         <TextInput placeholderTextColor={c.muted} style={styles.popupInput} placeholder="כותרת הפתק..." value={newTitle} onChangeText={setNewTitle} />
-        <TextInput placeholderTextColor={c.muted}
-          style={[styles.popupInput, styles.popupTextarea]}
-          placeholder="כתוב את המטלה או ההערה..."
-          multiline
-          value={newBody}
-          onChangeText={setNewBody}
+        <NoteEditor
+          key={`new-${editorKey}`}
+          initialHtml=""
+          onChange={(h) => {
+            setNewHtml(h);
+            setNewBody(htmlToPlain(h));
+          }}
         />
+        <Text style={styles.hintText}>צבע הפתק</Text>
+        <NoteColorPicker value={newColor} onChange={setNewColor} />
         <ReminderEditor value={newReminder} onChange={setNewReminder} />
         <TouchableOpacity style={styles.darkBtn} onPress={createNote}>
           <Text style={styles.whiteBtnText}>הדבק לשולחן העבודה</Text>
@@ -1130,13 +1198,18 @@ function AppInner({
       {/* ---------- popup: existing note ---------- */}
       <PopupShell visible={!!selectedNote} title="פרטי פתק" onClose={() => setSelectedNote(null)}>
         <TextInput placeholderTextColor={c.muted} style={styles.popupInput} value={editTitle} onChangeText={setEditTitle} placeholder="כותרת" />
-        <TextInput placeholderTextColor={c.muted}
-          style={[styles.popupInput, styles.popupTextarea]}
-          value={editBody}
-          onChangeText={setEditBody}
-          multiline
-          placeholder="תוכן הפתק"
-        />
+        {selectedNote ? (
+          <NoteEditor
+            key={`edit-${editorKey}`}
+            initialHtml={editHtml}
+            onChange={(h) => {
+              setEditHtml(h);
+              setEditBody(htmlToPlain(h));
+            }}
+          />
+        ) : null}
+        <Text style={styles.hintText}>צבע הפתק</Text>
+        <NoteColorPicker value={editColor} onChange={setEditColor} />
         <ReminderEditor value={editReminder} onChange={setEditReminder} />
         {selectedNote ? (
           <TouchableOpacity
@@ -1411,6 +1484,8 @@ function AppInner({
         onImport={doImport}
         themeMode={themeMode}
         onThemeMode={setThemeMode}
+        accent={accent}
+        onAccent={setAccent}
       />
     </SafeAreaView>
   );

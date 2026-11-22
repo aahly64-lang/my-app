@@ -216,6 +216,10 @@ class GeoAlarmModule : Module() {
       DocumentsHelper.copyInto(context, src, treeUri, name, mime)
     }
 
+    AsyncFunction("createFolder") { parentUri: String, name: String ->
+      DocumentsHelper.createFolder(context, parentUri, name)
+    }
+
     /** Google's document scanner: returns the content uri of the scanned PDF, or null if cancelled. */
     AsyncFunction("scanDocument") { promise: Promise ->
       val activity = appContext.currentActivity
@@ -229,7 +233,10 @@ class GeoAlarmModule : Module() {
         val options = com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder()
           .setGalleryImportAllowed(true)
           .setPageLimit(30)
-          .setResultFormats(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
+          .setResultFormats(
+            com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG,
+            com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF
+          )
           .setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL)
           .build()
         com.google.mlkit.vision.documentscanner.GmsDocumentScanning.getClient(options)
@@ -262,9 +269,16 @@ class GeoAlarmModule : Module() {
         }
         val result = com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult.fromActivityResultIntent(payload.data)
         val pdf = result?.pdf
-        promise.resolve(
-          if (pdf == null) null else mapOf("uri" to pdf.uri.toString(), "pages" to pdf.pageCount.toDouble())
-        )
+        val pages = result?.pages?.map { it.imageUri } ?: emptyList()
+        // Clean every page the same way, off the main thread; fall back to the scanner's PDF.
+        Thread {
+          val enhanced = try { ScanEnhancer.enhance(context, pages) } catch (e: Throwable) { null }
+          val uri = enhanced ?: pdf?.uri?.toString()
+          val count = if (pages.isNotEmpty()) pages.size else (pdf?.pageCount ?: 0)
+          promise.resolve(
+            if (uri == null) null else mapOf("uri" to uri, "pages" to count.toDouble(), "enhanced" to (enhanced != null))
+          )
+        }.start()
         return@OnActivityResult
       }
       if (payload.requestCode != soundRequestCode) return@OnActivityResult

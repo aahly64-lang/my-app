@@ -21,6 +21,8 @@ export interface StickyNote {
   scheduleTime?: string; // HH:MM
   notificationId?: string | null;
   docs?: DocLink[]; // attached documents from the documents tab
+  html?: string; // formatted body (body keeps the plain text)
+  color?: string; // note color key (see NOTE_COLORS)
 }
 
 /** A file from a connected folder, attached to a task or a note. */
@@ -35,6 +37,9 @@ export interface WorkoutLink {
   title: string;
   url: string;
   platform: 'youtube' | 'facebook' | 'other';
+  note?: string; // personal note
+  fav?: boolean;
+  tags?: string[]; // equipment
 }
 
 export interface MuscleCategory {
@@ -257,6 +262,9 @@ export interface DocFolder {
 
 export const loadThemeMode = async () => ((await readJson<string>(THEME_KEY)) as 'auto' | 'light' | 'dark' | null) ?? 'auto';
 export const saveThemeMode = (m: string) => writeJson(THEME_KEY, m);
+export const ACCENT_KEY = '@avi_accent_v1';
+export const loadAccent = async () => (await readJson<string>(ACCENT_KEY)) ?? 'yellow';
+export const saveAccent = (k: string) => writeJson(ACCENT_KEY, k);
 export const loadGroups = () => readJson<WorkoutGroup[]>(GROUPS_KEY);
 export const saveGroups = (g: WorkoutGroup[]) => writeJson(GROUPS_KEY, g);
 export const loadTasks = async () => (await readJson<Task[]>(TASKS_KEY)) ?? [];
@@ -343,3 +351,35 @@ export const loadDocRecent = async () => (await readJson<RecentDoc[]>(DOC_RECENT
 export const saveDocRecent = (r: RecentDoc[]) => writeJson(DOC_RECENT_KEY, r);
 export const loadDocView = async () => ((await readJson<string>(DOC_VIEW_KEY)) as 'list' | 'grid' | null) ?? 'list';
 export const saveDocView = (v: 'list' | 'grid') => writeJson(DOC_VIEW_KEY, v);
+
+// ---------- stopwatch & journals ----------
+
+export const STOPWATCH_KEY = '@avi_stopwatch_v1';
+export const JOURNALS_KEY = '@avi_journals_v1';
+
+export interface StopwatchState {
+  startAt: number | null; // running since (ms epoch)
+  accumulated: number; // ms counted before the current run
+}
+
+export interface JournalEntry {
+  id: string;
+  ms: number;
+  at?: number; // date/time of the entry (optional)
+  note?: string;
+  savedAt: number;
+}
+
+export interface Journal {
+  id: string;
+  name: string;
+  locked?: boolean; // ask for fingerprint / screen lock before opening
+  entries: JournalEntry[];
+  createdAt: number;
+}
+
+export const loadStopwatch = async () =>
+  (await readJson<StopwatchState>(STOPWATCH_KEY)) ?? { startAt: null, accumulated: 0 };
+export const saveStopwatch = (s: StopwatchState) => writeJson(STOPWATCH_KEY, s);
+export const loadJournals = async () => (await readJson<Journal[]>(JOURNALS_KEY)) ?? [];
+export const saveJournals = (j: Journal[]) => writeJson(JOURNALS_KEY, j);
