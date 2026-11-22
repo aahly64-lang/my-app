@@ -362,27 +362,12 @@ function JournalsScreen({
     patch(j.id, { locked: !j.locked });
   };
 
-  const journalMenu = (j: Journal) => {
-    Alert.alert(j.name, undefined, [
-      {
-        text: 'שנה שם',
-        onPress: () => {
-          setRenaming(j);
-          setRenameText(j.name);
-        },
-      },
-      { text: j.locked ? '🔓 הסר נעילה' : '🔒 נעל (טביעת אצבע / קוד)', onPress: () => toggleLock(j) },
-      {
-        text: 'מחק יומן',
-        style: 'destructive',
-        onPress: () =>
-          confirm('מחיקת יומן', `למחוק את "${j.name}" וכל ${j.entries.length} הרשומות שבו?`, 'מחק', () => {
-            onChange(journals.filter((x) => x.id !== j.id));
-            setOpenId(null);
-          }),
-      },
-      { text: 'ביטול', style: 'cancel' },
-    ]);
+  const [menuFor, setMenuFor] = useState<Journal | null>(null);
+  const journalMenu = (j: Journal) => setMenuFor(j);
+  const menuAction = (fn: (j: Journal) => void) => {
+    const j = menuFor;
+    setMenuFor(null);
+    if (j) fn(j);
   };
 
   return (
@@ -447,6 +432,36 @@ function JournalsScreen({
           />
         )}
       </View>
+
+      <PopupShell visible={!!menuFor} title={menuFor?.name ?? ''} onClose={() => setMenuFor(null)} yellow={false}>
+        <TouchableOpacity
+          style={styles.menuRow}
+          onPress={() =>
+            menuAction((j) => {
+              setRenaming(j);
+              setRenameText(j.name);
+            })
+          }
+        >
+          <Text style={styles.menuText}>✏️  שנה שם</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.menuRow} onPress={() => menuAction(toggleLock)}>
+          <Text style={styles.menuText}>{menuFor?.locked ? '🔓  הסר נעילה' : '🔒  נעל (טביעת אצבע / קוד)'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.menuRow}
+          onPress={() =>
+            menuAction((j) =>
+              confirm('מחיקת יומן', `למחוק את "${j.name}" וכל ${j.entries.length} הרשומות שבו?`, 'מחק', () => {
+                onChange(journals.filter((x) => x.id !== j.id));
+                setOpenId(null);
+              })
+            )
+          }
+        >
+          <Text style={[styles.menuText, { color: c.danger }]}>🗑️  מחק יומן</Text>
+        </TouchableOpacity>
+      </PopupShell>
 
       <PopupShell visible={!!renaming} title="שם היומן" onClose={() => setRenaming(null)}>
         <TextInput
@@ -610,5 +625,7 @@ const makeStyles = (c: Palette) => ({
     marginBottom: 8,
   },
   entryTime: { fontSize: 18, fontWeight: '600' as const, color: c.text, fontVariant: ['tabular-nums' as const] },
+  menuRow: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.borderSoft },
+  menuText: { fontSize: 15.5, fontWeight: '600' as const, color: c.text },
   entryNote: { fontSize: 13.5, color: c.text2, marginTop: 2 },
 });

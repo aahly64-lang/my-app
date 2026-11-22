@@ -782,6 +782,21 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
             <TouchableOpacity style={styles.actionBtn} onPress={connectFolder}>
               <Text style={styles.actionText}>+ חבר תיקייה</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() =>
+                Alert.alert(
+                  '📁 תיקייה חדשה',
+                  'בחלון שייפתח, עבור למקום הרצוי (למשל "מסמכים"), לחץ על ⋮ או על סמל התיקייה עם +, בחר "תיקייה חדשה", תן שם, ואז "השתמש בתיקייה זו" ו"אפשר". התיקייה תופיע כאן ברשימה הראשית.',
+                  [
+                    { text: 'ביטול', style: 'cancel' },
+                    { text: 'המשך', onPress: connectFolder },
+                  ]
+                )
+              }
+            >
+              <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
+            </TouchableOpacity>
           </View>
           {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : null}
           <TextInput

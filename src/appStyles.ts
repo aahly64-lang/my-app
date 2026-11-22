@@ -317,6 +317,10 @@ export const makeAppStyles = (c: Palette) =>
       popupWhite: { backgroundColor: c.card },
       popupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
       popupTitle: { fontSize: 19, fontWeight: '700', color: c.noteText },
+      headerSaveBtn: { backgroundColor: c.accent, borderRadius: 16, paddingHorizontal: 14, height: 32, justifyContent: 'center' },
+      headerSaveText: { color: c.onAccent, fontWeight: '700', fontSize: 14 },
+      headerIconBtn: { backgroundColor: c.subtle, borderRadius: 16, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+      headerIconText: { color: c.text, fontWeight: '700', fontSize: 16 },
       closeX: {
         fontSize: 15,
         fontWeight: '700',

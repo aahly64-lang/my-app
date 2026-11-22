@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   AppState,
+  Keyboard,
   Linking,
   SafeAreaView,
   ScrollView,
@@ -482,6 +483,8 @@ function AppInner({
       return;
     }
     const id = newId();
+    Keyboard.dismiss();
+    if (!newReminder.enabled) setCreateVisible(false); // close right away; saving continues behind
     const ok = await scheduleNoteReminder(id, newTitle.trim(), newBody.trim(), newReminder, null);
     if (!ok) return;
     const item: StickyNote = {
@@ -509,6 +512,7 @@ function AppInner({
 
   const saveNote = async () => {
     if (!selectedNote) return;
+    Keyboard.dismiss();
     const ok = await scheduleNoteReminder(
       selectedNote.id,
       editTitle.trim(),
@@ -533,6 +537,30 @@ function AppInner({
       )
     );
     setSelectedNote(null);
+  };
+
+  const askSave = (onSave: () => void, onDiscard: () => void) =>
+    Alert.alert('לשמור את השינויים?', undefined, [
+      { text: 'המשך לערוך', style: 'cancel' },
+      { text: 'אל תשמור', style: 'destructive', onPress: onDiscard },
+      { text: 'שמור', onPress: onSave },
+    ], { cancelable: true });
+
+  const closeCreate = () => {
+    if (newTitle.trim() || newBody.trim()) askSave(createNote, () => setCreateVisible(false));
+    else setCreateVisible(false);
+  };
+
+  const closeEdit = () => {
+    const n = selectedNote;
+    if (!n) return;
+    const dirty =
+      editTitle !== n.title ||
+      editBody.trim() !== (n.body ?? '').trim() ||
+      (editColor === 'default' ? undefined : editColor) !== n.color ||
+      JSON.stringify(editReminder) !== JSON.stringify(reminderFromNote(n));
+    if (dirty) askSave(saveNote, () => setSelectedNote(null));
+    else setSelectedNote(null);
   };
 
   const toggleDone = async (note: StickyNote) => {
@@ -1177,7 +1205,16 @@ function AppInner({
       ) : null}
 
       {/* ---------- popup: new note ---------- */}
-      <PopupShell visible={createVisible} title="פתק צהוב חדש" onClose={() => setCreateVisible(false)}>
+      <PopupShell
+        visible={createVisible}
+        title="פתק חדש"
+        onClose={closeCreate}
+        actions={
+          <TouchableOpacity style={styles.headerSaveBtn} onPress={createNote} hitSlop={8}>
+            <Text style={styles.headerSaveText}>✓ שמור</Text>
+          </TouchableOpacity>
+        }
+      >
         <TextInput placeholderTextColor={c.muted} style={styles.popupInput} placeholder="כותרת הפתק..." value={newTitle} onChangeText={setNewTitle} />
         <NoteEditor
           key={`new-${editorKey}`}
@@ -1196,7 +1233,21 @@ function AppInner({
       </PopupShell>
 
       {/* ---------- popup: existing note ---------- */}
-      <PopupShell visible={!!selectedNote} title="פרטי פתק" onClose={() => setSelectedNote(null)}>
+      <PopupShell
+        visible={!!selectedNote}
+        title="פרטי פתק"
+        onClose={closeEdit}
+        actions={
+          <>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={() => selectedNote && shareNote(selectedNote)} hitSlop={8}>
+              <Text style={styles.headerIconText}>⤴</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.headerSaveBtn} onPress={saveNote} hitSlop={8}>
+              <Text style={styles.headerSaveText}>✓ שמור</Text>
+            </TouchableOpacity>
+          </>
+        }
+      >
         <TextInput placeholderTextColor={c.muted} style={styles.popupInput} value={editTitle} onChangeText={setEditTitle} placeholder="כותרת" />
         {selectedNote ? (
           <NoteEditor

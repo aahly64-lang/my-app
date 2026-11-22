@@ -231,6 +231,23 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
 
   return (
     <View style={styles.editorWrap}>
+      <RichEditor
+        ref={ref}
+        initialContentHTML={initialHtml}
+        onChange={onChange}
+        placeholder="כתוב כאן..."
+        initialHeight={170}
+        useContainer
+        editorStyle={{
+          backgroundColor: c.noteInput,
+          color: c.noteText,
+          placeholderColor: c.muted,
+          caretColor: c.text,
+          contentCSSText: 'font-size: 16px; direction: rtl; text-align: right; padding: 4px 8px; min-height: 160px;',
+          initialCSSText: 'body { direction: rtl; } ol.x-todo { padding-right: 24px; }',
+        }}
+        style={styles.editor}
+      />
       <RichToolbar
         editor={ref}
         style={styles.toolbar}
@@ -274,23 +291,6 @@ export function NoteEditor({ initialHtml, onChange }: { initialHtml: string; onC
         fontSizePick={() => setPick('size')}
         colorPick={() => setPick('color')}
         hilitePick={() => setPick('hilite')}
-      />
-      <RichEditor
-        ref={ref}
-        initialContentHTML={initialHtml}
-        onChange={onChange}
-        placeholder="כתוב כאן..."
-        initialHeight={170}
-        useContainer
-        editorStyle={{
-          backgroundColor: c.noteInput,
-          color: c.noteText,
-          placeholderColor: c.muted,
-          caretColor: c.text,
-          contentCSSText: 'font-size: 16px; direction: rtl; text-align: right; padding: 4px 8px; min-height: 160px;',
-          initialCSSText: 'body { direction: rtl; } ol.x-todo { padding-right: 24px; }',
-        }}
-        style={styles.editor}
       />
 
       <Modal visible={pick !== null} transparent animationType="fade" onRequestClose={() => setPick(null)}>
@@ -354,7 +354,7 @@ const makeStyles = (c: Palette) => ({
   colorDotOn: { borderWidth: 3, borderColor: c.accent },
   colorCheck: { fontSize: 14, fontWeight: '900' as const, color: c.text },
   editorWrap: { borderRadius: 12, overflow: 'hidden' as const, borderWidth: 1, borderColor: c.border, marginBottom: 10 },
-  toolbar: { backgroundColor: c.subtle, height: 44 },
+  toolbar: { backgroundColor: c.subtle, height: 44, borderTopWidth: 1, borderTopColor: c.border },
   tool: { fontSize: 17, minWidth: 22, textAlign: 'center' as const },
   toolOn: { backgroundColor: c.accent, borderRadius: 8 },
   editor: { minHeight: 170 },

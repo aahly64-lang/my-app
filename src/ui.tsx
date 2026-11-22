@@ -17,12 +17,14 @@ export function PopupShell({
   onClose,
   children,
   yellow = true,
+  actions,
 }: {
   visible: boolean;
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   yellow?: boolean;
+  actions?: React.ReactNode; // extra buttons in the header, before the ✕
 }) {
   const styles = useAppStyles();
   return (
@@ -30,10 +32,15 @@ export function PopupShell({
       <View style={styles.backdrop}>
         <View style={[styles.popup, yellow ? styles.popupYellow : styles.popupWhite]}>
           <View style={styles.popupHeader}>
-            <Text style={[styles.popupTitle, !yellow && styles.popupTitlePlain]}>{title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={12}>
-              <Text style={[styles.closeX, !yellow && styles.popupTitlePlain]}>✕</Text>
-            </TouchableOpacity>
+            <Text style={[styles.popupTitle, !yellow && styles.popupTitlePlain, { flex: 1 }]} numberOfLines={1}>
+              {title}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {actions}
+              <TouchableOpacity onPress={onClose} hitSlop={12}>
+                <Text style={[styles.closeX, !yellow && styles.popupTitlePlain]}>✕</Text>
+              </TouchableOpacity>
+            </View>
           </View>
           <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
         </View>
