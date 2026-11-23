@@ -712,7 +712,17 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
         ) : null}
       </PopupShell>
 
-      <PopupShell visible={!!edit} title="משימה" onClose={() => setEdit(null)} yellow={false}>
+      <PopupShell
+        visible={!!edit}
+        title="משימה"
+        onClose={() => setEdit(null)}
+        yellow={false}
+        actions={
+          <TouchableOpacity style={styles.headerSaveBtn} onPress={saveEdit}>
+            <Text style={styles.headerSaveText}>✓ שמור</Text>
+          </TouchableOpacity>
+        }
+      >
         {edit ? (
           <>
             <TextInput

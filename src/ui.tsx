@@ -42,7 +42,13 @@ export function PopupShell({
               </TouchableOpacity>
             </View>
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
+          <ScrollView
+            style={{ flexShrink: 1 }}
+            contentContainerStyle={{ paddingBottom: 12 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            {children}
+          </ScrollView>
         </View>
       </View>
     </Modal>
