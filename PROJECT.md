@@ -230,3 +230,7 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - MapPicker (בחירת אזור): במקום Leaflet/OSM ב-WebView, מפת Google נייטיב: לחיצה בוחרת מרכז, סיכה ניתנת לגרירה, עיגול רדיוס, +/− רדיוס, שכבות (רגילה/לוויין/היברידית), "המיקום שלי" (נקודה כחולה). חיפוש כתובת דרך Location.geocodeAsync ו-reverseGeocodeAsync של הטלפון, בחינם, בלי Places API.
 - יומן מיקום על המפה (src/GeoLogMap.tsx): כל רשומה חדשה ב-addGeoLog שומרת את המיקום האחרון הידוע (lat/lon, עד 1.5 שניות). הסיכות צבועות לפי סוג, ועיגולי האזורים מוצגים. כפתור "🗺️ הצג על המפה" ביומן.
 - mapHtml.ts ו-leafletAssets.ts כבר לא בשימוש (נשארו בריפו).
+
+## גרסה 1.10.1 (23/11/2026)
+- תיקון: כל החלוניות (PopupShell) נגללות עד הסוף – ScrollView קיבל flexShrink:1 בתוך maxHeight 88% (לפני כן תוכן ארוך נחתך, למשל עריכת משימה בלי שמור/מחק).
+- עריכת משימה: כפתור "✓ שמור" בכותרת החלונית.
