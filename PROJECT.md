@@ -219,3 +219,14 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 ## גרסה 1.9.3 (22/11/2026)
 - הקריסה בפתיחת פתק, לפי הודעת crashLog ששלח אבי: "ListMetricsAggregator must be notified of list content layout before resolving offsets". זה באג של VirtualizedList ב-RN 0.76 ב-FlatList אופקי ב-RTL. ה-RichToolbar של pell בנוי מ-FlatList כזה, והעטיפה החדשה (שורה עם ⋯) ב-1.9.1 הפעילה את הבאג. במקומו נבנה סרגל משלנו (ScrollView אופקי, TOOLS ב-richNote.tsx) שקורא ל-editor.sendAction, ומצב "פעיל" מגיע מ-registerToolbar.
 - העברת קבצים: native move מחזיר {status: moved|copied|failed, uri, error}. "copied" אומר שההעתקה הצליחה אבל מחיקת המקור נכשלה (למשל בתיקיית הורדות). אז מוצגת הודעה מתאימה עם הצעה לנתק ולחבר מחדש. בכישלון מוצגת הסיבה המדויקת לכל קובץ.
+
+## גרסה 1.9.4 (23/11/2026, לא שוחררה בנפרד, נכללת ב-1.10.0)
+- סריקה הפוכה (המשך): דף בדיקה הוכיח שכותב ה-PDF תקין. ההשערה (לא אומתה): הסורק של Google שומר עמוד עם /Rotate, ו-PdfRenderer של אנדרואיד מתעלם ממנו. pageRotations() קורא /Rotate לכל עמוד (כולל ירושה מ-/Pages), והעמוד מסובב לפני הניקוי. אם אי אפשר לקרוא בבטחה (ObjStm, או מספר עמודים לא תואם), נשמר ה-PDF המקורי של Google. גם "סובב עמודים" מוסיף את /Rotate הקיים.
+- תיקייה חדשה במסך הראשי: רק שם וכפתור "צור". נוצרת בתוך התיקייה המחוברת (בחירה אם יש כמה), ומתווספת לרשימה הראשית כתיקייה בפני עצמה, בלי בוחר התיקיות של המערכת.
+
+## גרסה 1.10.0 (23/11/2026) – Google Maps
+- Google Cloud: הפרויקט "My Maps Project" (fine-iterator-515618-b2), חשבון חיוב בתקופת ניסיון, Maps SDK for Android מופעל. המפתח "Maps Platform API Key" נעול לאפליקציות Android: ‏com.avi.personalboard + SHA-1 5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25 (ה-debug.keystore הסטנדרטי שחותם את ה-release). תקציב "Maps alert": ‏5₪ לחודש, התראות ב-50/90/100%.
+- app.json: ‏android.config.googleMaps.apiKey. ‏react-native-maps 1.18.0 (PROVIDER_GOOGLE).
+- MapPicker (בחירת אזור): במקום Leaflet/OSM ב-WebView, מפת Google נייטיב: לחיצה בוחרת מרכז, סיכה ניתנת לגרירה, עיגול רדיוס, +/− רדיוס, שכבות (רגילה/לוויין/היברידית), "המיקום שלי" (נקודה כחולה). חיפוש כתובת דרך Location.geocodeAsync ו-reverseGeocodeAsync של הטלפון, בחינם, בלי Places API.
+- יומן מיקום על המפה (src/GeoLogMap.tsx): כל רשומה חדשה ב-addGeoLog שומרת את המיקום האחרון הידוע (lat/lon, עד 1.5 שניות). הסיכות צבועות לפי סוג, ועיגולי האזורים מוצגים. כפתור "🗺️ הצג על המפה" ביומן.
+- mapHtml.ts ו-leafletAssets.ts כבר לא בשימוש (נשארו בריפו).

@@ -41,6 +41,14 @@ object ScanEnhancer {
       val jpegs = ArrayList<Triple<ByteArray, Int, Int>>()
       val pfd = ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY)
       val renderer = PdfRenderer(pfd)
+      // The scanner may store a page sideways with a "/Rotate" note that viewers apply; Android's renderer
+      // does not, so the page came out upside down. Apply it ourselves; if it can't be read, keep the original.
+      val rotations = pageRotations(tmp, renderer.pageCount)
+      if (rotations == null) {
+        renderer.close()
+        pfd.close()
+        return null
+      }
       try {
         for (i in 0 until renderer.pageCount) {
           val page = renderer.openPage(i)
@@ -51,8 +59,14 @@ object ScanEnhancer {
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bmp.eraseColor(Color.WHITE)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-            val clean = levels(bmp)
-            if (clean !== bmp) bmp.recycle()
+            val deg = ((rotations[i] % 360) + 360) % 360
+            val upright = if (deg == 0) bmp else {
+              val r = Bitmap.createBitmap(bmp, 0, 0, w, h, Matrix().apply { postRotate(deg.toFloat()) }, true)
+              if (r !== bmp) bmp.recycle()
+              r
+            }
+            val clean = levels(upright)
+            if (clean !== upright) upright.recycle()
             jpegs.add(Triple(toJpeg(clean, q), clean.width, clean.height))
             clean.recycle()
           } finally {
@@ -86,6 +100,7 @@ object ScanEnhancer {
       val jpegs = ArrayList<Triple<ByteArray, Int, Int>>()
       val pfd = ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY)
       val renderer = PdfRenderer(pfd)
+      val rotations = pageRotations(tmp, renderer.pageCount) ?: IntArray(renderer.pageCount)
       try {
         for (i in 0 until renderer.pageCount) {
           val page = renderer.openPage(i)
@@ -96,7 +111,7 @@ object ScanEnhancer {
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bmp.eraseColor(Color.WHITE)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-            val m = Matrix().apply { postRotate(degrees.toFloat()) }
+            val m = Matrix().apply { postRotate((degrees + rotations[i]).toFloat()) }
             val rot = Bitmap.createBitmap(bmp, 0, 0, w, h, m, true)
             if (rot !== bmp) bmp.recycle()
             jpegs.add(Triple(toJpeg(rot, 78), rot.width, rot.height))
@@ -117,6 +132,35 @@ object ScanEnhancer {
     } finally {
       tmp.delete()
     }
+  }
+
+  /**
+   * /Rotate of every page, in page order. Returns null when it can't be determined safely
+   * (compressed object streams, or a count that doesn't match), so the caller keeps the original file.
+   */
+  private fun pageRotations(file: File, pageCount: Int): IntArray? {
+    val text = String(file.readBytes(), Charsets.ISO_8859_1)
+    val pages = Regex("/Type\\s*/Page(?![a-zA-Z])").findAll(text).toList()
+    val rotateRe = Regex("/Rotate\\s+(-?\\d+)")
+    if (pages.size != pageCount) {
+      // page objects hidden in compressed streams: only safe if nothing is rotated anywhere we can see
+      return if (text.contains("/ObjStm") || rotateRe.containsMatchIn(text)) null else IntArray(pageCount)
+    }
+    // inherited from the /Pages node: applies to pages without their own value
+    var inherited = 0
+    Regex("/Type\\s*/Pages").find(text)?.let { m ->
+      val start = text.lastIndexOf(" obj", m.range.first)
+      val end = text.indexOf("endobj", m.range.first)
+      if (start >= 0 && end > 0) rotateRe.find(text.substring(start, end))?.let { inherited = it.groupValues[1].toInt() }
+    }
+    val out = IntArray(pageCount)
+    for ((i, m) in pages.withIndex()) {
+      val start = text.lastIndexOf(" obj", m.range.first)
+      val end = text.indexOf("endobj", m.range.first)
+      if (start < 0 || end < 0) return null
+      out[i] = rotateRe.find(text.substring(start, end))?.groupValues?.get(1)?.toInt() ?: inherited
+    }
+    return out
   }
 
   // ---------------------------------------------------------------- PDF writer

@@ -190,6 +190,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const [selected, setSelected] = useState<Set<string> | null>(null); // multi-select
   const [scanPick, setScanPick] = useState<{ uri: string; name: string } | null>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null); // name being typed
+  const [newFolderParent, setNewFolderParent] = useState<DocFolder | null>(null); // home: where to create
   const [scanBusy, setScanBusy] = useState(false);
   const [quality, setQuality] = useState<ScanQuality>('normal');
   const [qualityPick, setQualityPick] = useState(false);
@@ -316,18 +317,37 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
 
   const createFolder = async () => {
     const name = (newFolder ?? '').trim().replace(/[\\/:*?"<>|]/g, '');
-    if (!current || !name) return;
-    if (entries.some((e) => e.isDir && e.name === name)) {
+    const parent = current ?? newFolderParent;
+    if (!parent || !name) return;
+    if (current && entries.some((e) => e.isDir && e.name === name)) {
       Alert.alert('תיקייה חדשה', `כבר יש כאן תיקייה בשם "${name}".`);
       return;
     }
-    const uri = await GeoAlarm.createFolder(current.uri, name);
+    const uri = await GeoAlarm.createFolder(parent.uri, name);
     setNewFolder(null);
     if (!uri) {
       Alert.alert('תיקייה חדשה', 'לא הצלחתי ליצור את התיקייה. ייתכן שאין הרשאת כתיבה – נתק וחבר את התיקייה שוב.');
       return;
     }
-    refresh();
+    if (current) refresh();
+    else {
+      // home: show the new folder in the main list as a folder of its own
+      const next = [...folders, { uri, name }];
+      setFolders(next);
+      saveDocFolders(next);
+    }
+  };
+
+  const startNewFolder = () => {
+    if (!folders.length) {
+      Alert.alert('📁 תיקייה חדשה', 'קודם צריך לחבר תיקייה אחת מהטלפון (למשל "מסמכים"). אחרי זה אפשר ליצור תיקיות בלחיצה.', [
+        { text: 'ביטול', style: 'cancel' },
+        { text: 'חבר תיקייה', onPress: connectFolder },
+      ]);
+      return;
+    }
+    setNewFolderParent(folders.length === 1 ? folders[0] : null);
+    setNewFolder('');
   };
 
   const disconnect = (f: DocFolder) => {
@@ -1084,8 +1104,28 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         autoFocus
         onSubmitEditing={createFolder}
       />
-      <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={createFolder}>
-        <Text style={styles.actionPrimaryText}>צור תיקייה</Text>
+      {!current && folders.length > 1 ? (
+        <>
+          <Text style={styles.popupHint}>איפה ליצור?</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+            {folders.map((f) => (
+              <TouchableOpacity
+                key={f.uri}
+                style={[styles.chip, newFolderParent?.uri === f.uri && styles.chipOn]}
+                onPress={() => setNewFolderParent(f)}
+              >
+                <Text style={[styles.chipText, newFolderParent?.uri === f.uri && styles.chipTextOn]}>📁 {f.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
+      <TouchableOpacity
+        style={[styles.actionBtn, styles.actionPrimary, !current && !newFolderParent && { opacity: 0.5 }]}
+        disabled={!current && !newFolderParent}
+        onPress={createFolder}
+      >
+        <Text style={styles.actionPrimaryText}>צור</Text>
       </TouchableOpacity>
     </PopupShell>
   );
@@ -1109,16 +1149,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtn}
-              onPress={() =>
-                Alert.alert(
-                  '📁 תיקייה חדשה',
-                  'בחלון שייפתח, עבור למקום הרצוי (למשל "מסמכים"), לחץ על ⋮ או על סמל התיקייה עם +, בחר "תיקייה חדשה", תן שם, ואז "השתמש בתיקייה זו" ו"אפשר". התיקייה תופיע כאן ברשימה הראשית.',
-                  [
-                    { text: 'ביטול', style: 'cancel' },
-                    { text: 'המשך', onPress: connectFolder },
-                  ]
-                )
-              }
+              onPress={startNewFolder}
             >
               <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
             </TouchableOpacity>
@@ -1195,6 +1226,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         {menuPopup}
         {scanPopup}
         {qualityPopup}
+        {newFolderPopup}
       </View>
     );
   }

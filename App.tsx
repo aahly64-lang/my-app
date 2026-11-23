@@ -21,6 +21,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { GeoAlarm } from './modules/geo-alarm';
 import MapPicker, { MapSelection } from './src/MapPicker';
+import GeoLogMap from './src/GeoLogMap';
 import RingtonesScreen from './src/RingtonesScreen';
 import { DocChips } from './src/docLinks';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
@@ -296,6 +297,7 @@ function AppInner({
   const [permissionsOk, setPermissionsOk] = useState(true);
   const [bgLocationOk, setBgLocationOk] = useState(true);
   const [geoLog, setGeoLog] = useState<GeoLogEntry[] | null>(null);
+  const [logMapVisible, setLogMapVisible] = useState(false);
   const [ringtonesVisible, setRingtonesVisible] = useState(false);
   const [showAllAlarms, setShowAllAlarms] = useState(false);
   const [showAllAreas, setShowAllAreas] = useState(false);
@@ -1469,6 +1471,8 @@ function AppInner({
         ) : null}
       </PopupShell>
 
+      <GeoLogMap visible={logMapVisible} entries={geoLog ?? []} areas={areas} onClose={() => setLogMapVisible(false)} />
+
       <MapPicker
         visible={mapVisible}
         initial={mapInitial}
@@ -1484,6 +1488,9 @@ function AppInner({
         {geoLog && geoLog.length === 0 ? (
           <Text style={styles.emptyText}>עדיין אין אירועים.</Text>
         ) : null}
+        <TouchableOpacity style={[styles.grayBtn, { marginVertical: 8, alignItems: 'center' }]} onPress={() => setLogMapVisible(true)}>
+          <Text style={styles.grayBtnText}>🗺️ הצג על המפה</Text>
+        </TouchableOpacity>
         {(geoLog ?? []).map((e, i) => {
           const d = new Date(e.at);
           const when = `${d.getDate()}/${d.getMonth() + 1} ${hhmm(d.getHours(), d.getMinutes())}`;

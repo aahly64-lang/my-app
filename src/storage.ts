@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 
 export const STORAGE_KEY = '@avi_board_apk_state_v2';
 export const AREAS_KEY = '@avi_geo_areas_v1';
@@ -139,6 +140,9 @@ export interface GeoLogEntry {
   /** Short Hebrew explanation of the outcome. */
   text: string;
   ok?: boolean;
+  /** Where the phone was (last known position), for the map. */
+  lat?: number;
+  lon?: number;
 }
 
 export const loadGeoLog = async () => (await readJson<GeoLogEntry[]>(GEO_LOG_KEY)) ?? [];
@@ -147,7 +151,17 @@ export async function addGeoLog(e: Omit<GeoLogEntry, 'at'>) {
   const list = await loadGeoLog();
   const last = list[0];
   if (last && last.text === e.text && last.label === e.label && Date.now() - last.at < 60 * 60 * 1000) return;
-  list.unshift({ ...e, at: Date.now() });
+  let pos: { lat: number; lon: number } | null = null;
+  try {
+    const p = await Promise.race([
+      Location.getLastKnownPositionAsync({ maxAge: 10 * 60 * 1000 }),
+      new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+    ]);
+    if (p) pos = { lat: p.coords.latitude, lon: p.coords.longitude };
+  } catch {
+    // no position - the entry is still logged
+  }
+  list.unshift({ ...e, at: Date.now(), ...(pos ?? {}) });
   await writeJson(GEO_LOG_KEY, list.slice(0, GEO_LOG_MAX));
 }
 
