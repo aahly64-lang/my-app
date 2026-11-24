@@ -722,6 +722,21 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
             <Text style={styles.headerSaveText}>✓ שמור</Text>
           </TouchableOpacity>
         }
+        footer={
+          edit ? (
+            <View style={styles.actionRow}>
+              <TouchableOpacity style={styles.greenBtn} onPress={saveEdit}>
+                <Text style={styles.whiteBtnText}>שמור</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.blueBtnFlex} onPress={toNote}>
+                <Text style={styles.softBtnText}>→ לפתק</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.redBtn} onPress={deleteFromEdit}>
+                <Text style={styles.dangerBtnText}>מחק</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null
+        }
       >
         {edit ? (
           <>
@@ -914,17 +929,6 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
               </TouchableOpacity>
             </View>
 
-            <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.greenBtn} onPress={saveEdit}>
-                <Text style={styles.whiteBtnText}>שמור</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.blueBtnFlex} onPress={toNote}>
-                <Text style={styles.softBtnText}>→ לפתק</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.redBtn} onPress={deleteFromEdit}>
-                <Text style={styles.dangerBtnText}>מחק</Text>
-              </TouchableOpacity>
-            </View>
           </>
         ) : null}
       </PopupShell>

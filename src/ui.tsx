@@ -1,5 +1,5 @@
-import React from 'react';
-import { Alert, Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, Keyboard, Modal, ScrollView, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { useAppStyles } from './appStyles';
 import { DAY_LETTERS, displayYMD, hhmm, parseHHMM, pickDate, pickTimeWheels } from './pickers';
 import { localDateString } from './storage';
@@ -18,6 +18,7 @@ export function PopupShell({
   children,
   yellow = true,
   actions,
+  footer,
 }: {
   visible: boolean;
   title: string;
@@ -25,13 +26,31 @@ export function PopupShell({
   children: React.ReactNode;
   yellow?: boolean;
   actions?: React.ReactNode; // extra buttons in the header, before the ✕
+  footer?: React.ReactNode; // fixed row under the scroll area (always visible)
 }) {
   const styles = useAppStyles();
+  // Android doesn't reliably pass a percentage maxHeight down to the ScrollView,
+  // so the scroll area gets an explicit pixel height computed from the screen.
+  const { height: winH } = useWindowDimensions();
+  const [headerH, setHeaderH] = useState(46);
+  const [footerH, setFooterH] = useState(0);
+  const [kbH, setKbH] = useState(0);
+  useEffect(() => {
+    if (!visible) return;
+    const a = Keyboard.addListener('keyboardDidShow', (e) => setKbH(e.endCoordinates?.height ?? 0));
+    const b = Keyboard.addListener('keyboardDidHide', () => setKbH(0));
+    return () => {
+      a.remove();
+      b.remove();
+    };
+  }, [visible]);
+  const popupMax = Math.max(220, Math.min(winH * 0.88, winH - 48 - 24 - kbH));
+  const scrollMax = Math.max(120, popupMax - 36 - headerH - (footer ? footerH : 0));
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={[styles.popup, yellow ? styles.popupYellow : styles.popupWhite]}>
-          <View style={styles.popupHeader}>
+        <View style={[styles.popup, yellow ? styles.popupYellow : styles.popupWhite, { maxHeight: popupMax }]}>
+          <View style={styles.popupHeader} onLayout={(e) => setHeaderH(e.nativeEvent.layout.height + 14)}>
             <Text style={[styles.popupTitle, !yellow && styles.popupTitlePlain, { flex: 1 }]} numberOfLines={1}>
               {title}
             </Text>
@@ -43,12 +62,13 @@ export function PopupShell({
             </View>
           </View>
           <ScrollView
-            style={{ flexShrink: 1 }}
+            style={{ flexGrow: 0, flexShrink: 1, maxHeight: scrollMax }}
             contentContainerStyle={{ paddingBottom: 12 }}
             keyboardShouldPersistTaps="handled"
           >
             {children}
           </ScrollView>
+          {footer ? <View onLayout={(e) => setFooterH(e.nativeEvent.layout.height)}>{footer}</View> : null}
         </View>
       </View>
     </Modal>

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { saveCrash } from './crashLog';
 import { NoteColorPicker, NoteEditor, noteBg } from './richNote';
 import { ReminderEditor, ReminderValue } from './ui';
@@ -62,7 +63,7 @@ export default function NoteScreen({
           <Text style={styles.headTitle}>{isNew ? 'פתק חדש' : 'פתק'}</Text>
           {onShare ? (
             <TouchableOpacity onPress={onShare} hitSlop={8} style={styles.iconBtn}>
-              <Text style={styles.iconText}>⤴</Text>
+              <Feather name="share-2" size={18} color={c.text} />
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
