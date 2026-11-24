@@ -28,7 +28,7 @@ import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
 import DocsTab from './src/DocsTab';
-import { syncGeofences, MIN_RADIUS_M } from './src/geoTask';
+import { syncGeofences, MIN_RADIUS_M, quietSetup } from './src/geoTask';
 import { exportBackup, pickBackup } from './src/backup';
 import { useAppStyles } from './src/appStyles';
 import { ThemeContext, ThemeMode, paletteFor, useTheme } from './src/theme';
@@ -258,6 +258,9 @@ export default function App() {
   }, []);
   useEffect(() => {
     setTimeout(showLastCrash, 1500);
+    // Only task reminders and alarms notify; no tracking icon or number on the app icon (1.10.3).
+    quietSetup().catch(() => {});
+    Notifications.setBadgeCountAsync(0).catch(() => {});
   }, []);
   const setAccent = (k: string) => {
     setAccentState(k);

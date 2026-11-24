@@ -239,3 +239,8 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - תיקון אמיתי לגלילת חלוניות: ל-ScrollView ב-PopupShell גובה מקסימלי בפיקסלים לפי גובה המסך (פחות כותרת, תחתית ומקלדת). התיקון של 1.10.1 (flexShrink) לא השפיע – זו כבר ברירת המחדל של ScrollView.
 - PopupShell: prop חדש footer – שורה קבועה מתחת לגלילה. בעריכת משימה: שמור / לפתק / מחק תמיד גלויים.
 - פתק: סמל השיתוף הוחלף בסמל השיתוף של אנדרואיד (Feather share-2).
+
+## גרסה 1.10.3 (24/11/2026) – התראות רק למה שצריך
+- בקשת אבי: התראה רק לתזכורות משימות (ושעונים מעוררים/מיקום ממשיכים לצלצל כרגיל, סיכום בוקר נשאר). בלי סמל קבוע בשורת הסטטוס ובלי מספר על אייקון האפליקציה.
+- מעקב מדויק: המשימה שונתה ל-avi-precise-location-task-v2; לפני ההפעלה נוצר ערוץ `<package>:<task>` ב-IMPORTANCE_MIN בלי badge (expo-location משתמש בערוץ קיים אם יש). המשימה הישנה נעצרת ומופעלת מחדש בשם החדש.
+- כל הערוצים בלי badge: ring2_*, reminders_silent_v2, morning_v2. הערוצים הישנים (ring_*, reminders_silent_v1, morning, הערוץ של המשימה הישנה) נמחקים. setBadgeCountAsync(0) בהפעלה.
