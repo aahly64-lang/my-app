@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
 import {
   AlarmArea,
@@ -38,7 +39,9 @@ type GeofenceTaskData = {
  * Android allows starting the tracking service from the background only right
  * after a geofence event, which is exactly when we start it.
  */
-export const PRECISE_TASK = 'avi-precise-location-task';
+// Renamed in 1.10.3 so its notification channel is created fresh as silent and badge-less.
+export const PRECISE_TASK = 'avi-precise-location-task-v2';
+const OLD_PRECISE_TASK = 'avi-precise-location-task';
 const APPROACH_PREFIX = 'approach:';
 const APPROACH_M = 4000;
 
@@ -71,6 +74,25 @@ async function activeAreas(areas: AlarmArea[]) {
   return areas.filter((a) => a.enabled || linked.has(a.id));
 }
 
+/** Stops the pre-1.10.3 tracking task if it is still running, and prepares the quiet channel. */
+let quietDone = false;
+export async function quietSetup() {
+  if (quietDone) return;
+  quietDone = true;
+  let oldWasRunning = false;
+  try {
+    if (await Location.hasStartedLocationUpdatesAsync(OLD_PRECISE_TASK)) {
+      oldWasRunning = true;
+      await Location.stopLocationUpdatesAsync(OLD_PRECISE_TASK);
+    }
+  } catch {
+    // never started
+  }
+  GeoAlarm.quietNotifications(PRECISE_TASK);
+  // If close tracking was on under the old name, start it again under the new (quiet) one.
+  if (oldWasRunning) await updateClose();
+}
+
 async function isCloseRunning() {
   try {
     return await Location.hasStartedLocationUpdatesAsync(PRECISE_TASK);
@@ -84,6 +106,7 @@ async function updateClose(reasonLabel?: string) {
   const states = await loadAreaStates();
   const precise = (await activeAreas(await loadAreas())).filter((a) => a.precise);
   const want = precise.filter((a) => states[a.id]?.approach === 'inside' && states[a.id]?.armed);
+  await quietSetup();
   const running = await isCloseRunning();
   const label = reasonLabel || want[0]?.label || 'מעקב צמוד';
 
@@ -223,6 +246,15 @@ TaskManager.defineTask<GeofenceTaskData>(GEOFENCE_TASK, async ({ data, error }) 
   if (!kind) return;
   if (rid.startsWith(APPROACH_PREFIX)) await handleApproach(rid.slice(APPROACH_PREFIX.length), kind);
   else await handleTransition(rid, kind, 'geofence');
+});
+
+// The old task name still has to exist so a leftover registration can be stopped cleanly.
+TaskManager.defineTask(OLD_PRECISE_TASK, async () => {
+  try {
+    await Location.stopLocationUpdatesAsync(OLD_PRECISE_TASK);
+  } catch {
+    // already stopped
+  }
 });
 
 TaskManager.defineTask<{ locations: Location.LocationObject[] }>(PRECISE_TASK, async ({ data, error }) => {

@@ -1,6 +1,8 @@
 import * as Notifications from 'expo-notifications';
 import { Task } from './storage';
 
+// v2: no number on the app icon (a channel's badge setting can't be changed later)
+const MORNING_CHANNEL = 'morning_v2';
 const ids = Array.from({ length: 7 }, (_, i) => `morning-${i}`);
 
 const ymd = (d: Date) =>
@@ -13,9 +15,10 @@ const ymd = (d: Date) =>
 export async function scheduleMorning(tasks: Task[], cfg: { enabled: boolean; time: string }) {
   for (const id of ids) await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
   if (!cfg.enabled) return;
-  await Notifications.setNotificationChannelAsync('morning', {
+  await Notifications.setNotificationChannelAsync(MORNING_CHANNEL, {
     name: 'סיכום בוקר',
     importance: Notifications.AndroidImportance.DEFAULT,
+    showBadge: false,
   }).catch(() => {});
   const [h, m] = cfg.time.split(':').map(Number);
   const now = new Date();
@@ -35,7 +38,7 @@ export async function scheduleMorning(tasks: Task[], cfg: { enabled: boolean; ti
         title: `☀️ ${open.length} משימות להיום${late ? ` (${late} באיחור)` : ''}`,
         body: lines.join('\n'),
       },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at, channelId: 'morning' },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at, channelId: MORNING_CHANNEL },
     }).catch(() => {});
   }
 }
