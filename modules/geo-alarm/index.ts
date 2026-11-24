@@ -42,6 +42,7 @@ export interface DocEntry {
 type GeoAlarmNative = {
   triggerAlarm(title: string, body: string, kind: string, sound: string | null, durationMs: number): void;
   scheduleRing(json: string): void;
+  quietNotifications(taskName: string): void;
   cancelRing(id: string): void;
   getScheduledRingIds(): string[];
   getSoundTitle(uri: string | null): string;
@@ -107,6 +108,8 @@ export const GeoAlarm = {
   available: !!native,
   triggerAlarm: (title: string, body: string, kind: RingKind, sound: string | null, durationMs: number) =>
     safe(() => native!.triggerAlarm(title, body, kind, sound, durationMs), undefined),
+  /** Removes old badge-showing channels and prepares a silent, badge-less channel for the location service. */
+  quietNotifications: (taskName: string) => safe(() => native!.quietNotifications(taskName), undefined),
   scheduleRing: (spec: RingSpec) => safe(() => native!.scheduleRing(JSON.stringify(spec)), undefined),
   cancelRing: (id: string) => safe(() => native!.cancelRing(id), undefined),
   getScheduledRingIds: () => safe(() => native!.getScheduledRingIds(), [] as string[]),
