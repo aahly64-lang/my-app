@@ -35,11 +35,13 @@ object AlarmNotifier {
 
   /** A notification channel's sound cannot change, so there is one channel per sound. */
   private fun ensureChannel(context: Context, sound: Uri): String {
-    val id = "ring_" + Integer.toHexString(sound.toString().hashCode())
+    val id = "ring2_" + Integer.toHexString(sound.toString().hashCode())
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return id
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     if (manager.getNotificationChannel(id) != null) return id
+    removeOldChannels(context)
     val channel = NotificationChannel(id, "צלצולים", NotificationManager.IMPORTANCE_HIGH)
+    channel.setShowBadge(false)
     channel.description = "שעון מעורר, טיימר, תזכורות והתראות מיקום"
     val attrs = AudioAttributes.Builder()
       .setUsage(AudioAttributes.USAGE_ALARM)
@@ -85,7 +87,48 @@ object AlarmNotifier {
     show(context, ring)
   }
 
-  private const val SILENT_CHANNEL = "reminders_silent_v1"
+  private const val SILENT_CHANNEL = "reminders_silent_v2"
+
+  /** Channels from before 1.10.3 showed a number on the app icon; a channel's badge setting can't change, so they are replaced. */
+  fun removeOldChannels(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    try {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      for (ch in manager.notificationChannels) {
+        val id = ch.id
+        if (id.startsWith("ring_") || id == "reminders_silent_v1" || id == "morning" ||
+          id.endsWith(":avi-precise-location-task")) {
+          try {
+            manager.deleteNotificationChannel(id)
+          } catch (e: Exception) {
+            // e.g. still used by a running foreground service – removed on a later start
+          }
+        }
+      }
+    } catch (e: Exception) {
+    }
+  }
+
+  /**
+   * The background-location service (expo-location) must show a notification. Its channel id is
+   * "<package>:<task>"; creating it first as IMPORTANCE_MIN without a badge keeps it out of the
+   * status bar and off the app icon (only a collapsed line at the bottom of the shade).
+   */
+  fun quietTrackingChannel(context: Context, taskName: String) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    try {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      val id = context.packageName + ":" + taskName
+      val ch = NotificationChannel(id, "מעקב מיקום ברקע", NotificationManager.IMPORTANCE_MIN)
+      ch.description = "התראה שקטה שאנדרואיד מחייב בזמן מעקב מיקום מדויק"
+      ch.setShowBadge(false)
+      ch.setSound(null, null)
+      ch.enableVibration(false)
+      // For an existing channel this can only lower the importance, which is what we want.
+      manager.createNotificationChannel(ch)
+    } catch (e: Exception) {
+    }
+  }
   private const val SILENT_BASE_ID = 47000
 
   /** Ordinary (non-ringing) reminder notification. */
@@ -94,7 +137,9 @@ object AlarmNotifier {
       val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
       if (manager.getNotificationChannel(SILENT_CHANNEL) == null) {
         manager.createNotificationChannel(
-          NotificationChannel(SILENT_CHANNEL, "תזכורות שקטות", NotificationManager.IMPORTANCE_DEFAULT)
+          NotificationChannel(SILENT_CHANNEL, "תזכורות", NotificationManager.IMPORTANCE_DEFAULT).apply {
+            setShowBadge(false)
+          }
         )
       }
     }

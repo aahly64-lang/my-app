@@ -65,6 +65,12 @@ class GeoAlarmModule : Module() {
       Unit
     }
 
+    Function("quietNotifications") { taskName: String ->
+      AlarmNotifier.removeOldChannels(context)
+      AlarmNotifier.quietTrackingChannel(context, taskName)
+      Unit
+    }
+
     Function("scheduleRing") { json: String ->
       RingScheduler.schedule(context, JSONObject(json))
       Unit
