@@ -29,9 +29,13 @@ type GeofenceTaskData = {
 /**
  * Precise areas
  * -------------
- * Around every precise area there is a second, large "approach" geofence (~4 km).
- * - Entering the approach zone turns on close tracking (location every ~10 s,
- *   with the "📍 מעקב אזורים פעיל" notification).
+ * Around every precise area there is a second "approach" geofence (~1.5 km, since 1.10.4).
+ * - Entering the approach zone turns on close tracking, in tiers to save battery:
+ *     far  – cell/Wi-Fi location (Balanced) every ~60 s
+ *     near – GPS every ~10 s, only when within ~500 m of the area's edge
+ *     idle – every ~5 min, when 20 min passed without getting 200 m closer (e.g. sitting at home)
+ *   (with the quiet "📍 מעקב אזורים פעיל" notification Android requires).
+ * - A tracked position clearly outside the approach zone counts as leaving it.
  * - Entering the point itself (rang or not) turns close tracking off.
  * - Leaving the point (still inside the approach zone) turns it on again,
  *   ready for a return.
@@ -43,22 +47,59 @@ type GeofenceTaskData = {
 export const PRECISE_TASK = 'avi-precise-location-task-v2';
 const OLD_PRECISE_TASK = 'avi-precise-location-task';
 const APPROACH_PREFIX = 'approach:';
-const APPROACH_M = 4000;
+const APPROACH_M = 1500;
+const NEAR_GAP_M = 500; // GPS only this close to the area's edge
+const IDLE_AFTER_MS = 20 * 60 * 1000; // no progress for this long → slow down
+const PROGRESS_M = 200;
 
-const approachRadius = (a: AlarmArea) => Math.max(APPROACH_M, Math.max(MIN_RADIUS_M, a.radiusMeters) + 1500);
+const approachRadius = (a: AlarmArea) => Math.max(APPROACH_M, Math.max(MIN_RADIUS_M, a.radiusMeters) + 1000);
 
-const CLOSE_OPTIONS: Location.LocationTaskOptions = {
-  accuracy: Location.Accuracy.High,
-  timeInterval: 10 * 1000,
-  distanceInterval: 10,
-  pausesUpdatesAutomatically: false,
-  foregroundService: {
-    notificationTitle: '📍 מעקב אזורים פעיל',
-    notificationBody: 'אתה מתקרב לאזור במצב מדויק – בודק מיקום כדי לצלצל בזמן',
-    notificationColor: '#FFD60A',
-    killServiceOnDestroy: false,
+const TRACKING_NOTICE: Location.LocationTaskOptions['foregroundService'] = {
+  notificationTitle: '📍 מעקב אזורים פעיל',
+  notificationBody: 'אתה קרוב לאזור במצב מדויק – בודק מיקום כדי לצלצל בזמן',
+  notificationColor: '#FFD60A',
+  killServiceOnDestroy: false,
+};
+
+type Tier = 'near' | 'far' | 'idle';
+const TIER_OPTIONS: Record<Tier, Location.LocationTaskOptions> = {
+  near: {
+    accuracy: Location.Accuracy.High,
+    timeInterval: 10 * 1000,
+    distanceInterval: 10,
+    pausesUpdatesAutomatically: false,
+    foregroundService: TRACKING_NOTICE,
+  },
+  far: {
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: 60 * 1000,
+    distanceInterval: 30,
+    pausesUpdatesAutomatically: false,
+    foregroundService: TRACKING_NOTICE,
+  },
+  idle: {
+    accuracy: Location.Accuracy.Balanced,
+    timeInterval: 5 * 60 * 1000,
+    distanceInterval: 50,
+    pausesUpdatesAutomatically: false,
+    foregroundService: TRACKING_NOTICE,
   },
 };
+
+// In-memory tier state (a fresh JS context just re-applies the tier once).
+let tier: Tier | null = null;
+let best = { gap: Infinity, at: 0 };
+
+async function setTier(next: Tier) {
+  if (tier === next) return;
+  try {
+    // Re-registering the same task only updates its location request.
+    await Location.startLocationUpdatesAsync(PRECISE_TASK, TIER_OPTIONS[next]);
+    tier = next;
+  } catch {
+    // keep the current request
+  }
+}
 
 /** Serialises enter/exit handling so the geofence and precise tasks can't ring twice. */
 let chain: Promise<unknown> = Promise.resolve();
@@ -112,7 +153,9 @@ async function updateClose(reasonLabel?: string) {
 
   if (want.length > 0 && !running) {
     try {
-      await Location.startLocationUpdatesAsync(PRECISE_TASK, CLOSE_OPTIONS);
+      await Location.startLocationUpdatesAsync(PRECISE_TASK, TIER_OPTIONS.far);
+      tier = 'far';
+      best = { gap: Infinity, at: Date.now() };
       await addGeoLog({ label, kind: 'start', text: 'מעקב צמוד הופעל', ok: true });
     } catch (e: any) {
       await addGeoLog({
@@ -127,6 +170,7 @@ async function updateClose(reasonLabel?: string) {
     } catch {
       // already stopped
     }
+    tier = null;
     await addGeoLog({ label, kind: 'start', text: 'מעקב צמוד כובה' });
   }
 }
@@ -269,12 +313,27 @@ TaskManager.defineTask<{ locations: Location.LocationObject[] }>(PRECISE_TASK, a
     return;
   }
   const acc = loc.coords.accuracy ?? 50;
+  let nearestGap = Infinity;
   for (const a of precise) {
     const r = Math.max(MIN_RADIUS_M, a.radiusMeters);
     const d = distanceM(loc.coords.latitude, loc.coords.longitude, a.latitude, a.longitude);
+    // Clearly outside the approach zone (also fixes states left from the old 4 km zone).
+    if (d - Math.min(acc, 300) > approachRadius(a) + 200) {
+      await handleApproach(a.id, 'exit');
+      continue;
+    }
     if (d <= r && acc <= Math.max(100, r)) await handleTransition(a.id, 'enter', 'precise');
     else if (d > r + Math.max(40, Math.min(acc, 150))) await handleTransition(a.id, 'exit', 'precise');
+    nearestGap = Math.min(nearestGap, Math.max(0, d - r));
   }
+  if (!Number.isFinite(nearestGap)) return;
+
+  // Battery: GPS only when close; slow down when not getting closer for a long time.
+  const now = Date.now();
+  if (nearestGap < best.gap - PROGRESS_M || best.at === 0) best = { gap: nearestGap, at: now };
+  if (nearestGap - Math.min(acc, 200) < NEAR_GAP_M) await setTier('near');
+  else if (now - best.at > IDLE_AFTER_MS) await setTier('idle');
+  else await setTier('far');
 });
 
 /** Distance in meters between two points. */
