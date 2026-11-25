@@ -24,6 +24,7 @@ export interface StickyNote {
   docs?: DocLink[]; // attached documents from the documents tab
   html?: string; // formatted body (body keeps the plain text)
   color?: string; // note color key (see NOTE_COLORS)
+  locked?: boolean; // needs fingerprint / phone lock to open
 }
 
 /** A file from a connected folder, attached to a task or a note. */
@@ -377,6 +378,7 @@ export interface DocMeta {
   fav?: boolean;
   expiry?: string; // YYYY-MM-DD
   remindDays?: number; // remind this many days before the expiry (0 = no reminder)
+  locked?: boolean; // needs fingerprint / phone lock to open or share
 }
 
 export interface RecentDoc extends DocLink {

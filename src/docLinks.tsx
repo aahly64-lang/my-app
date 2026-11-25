@@ -3,6 +3,7 @@ import { Alert, Text, TouchableOpacity, View } from 'react-native';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { Palette, useThemedStyles } from './theme';
 import { DocLink } from './storage';
+import { ensureUnlocked, isDocLocked } from './lock';
 
 export function docIcon(mime: string, isDir = false): string {
   if (isDir) return '📁';
@@ -18,7 +19,8 @@ export function docIcon(mime: string, isDir = false): string {
   return '📎';
 }
 
-export function openDoc(d: DocLink) {
+export async function openDoc(d: DocLink) {
+  if ((await isDocLocked(d.uri)) && !(await ensureUnlocked('פתיחת מסמך נעול'))) return;
   if (!GeoAlarm.openDocument(d.uri, d.mime)) {
     Alert.alert('לא ניתן לפתוח', 'הקובץ לא נמצא (אולי הוזז או נמחק), או שאין אפליקציה שפותחת אותו.');
   }

@@ -17,6 +17,7 @@ import { Palette, cardShadow, useTheme, useThemedStyles } from './theme';
 import { PopupShell, confirm } from './ui';
 import { docIcon } from './docLinks';
 import { displayYMD, pickDate } from './pickers';
+import { canLock, ensureUnlocked } from './lock';
 import { cancelRing, scheduleReminder } from './rings';
 import {
   DocFolder,
@@ -136,12 +137,12 @@ async function scheduleExpiry(uri: string, meta: DocMeta) {
 /** Thumbnails are cached for the whole session. */
 const thumbCache = new Map<string, string | null>();
 
-function Thumb({ e, size, styles }: { e: DocEntry; size: number; styles: ReturnType<typeof makeStyles> }) {
+function Thumb({ e, size, styles, locked }: { e: DocEntry; size: number; styles: ReturnType<typeof makeStyles>; locked?: boolean }) {
   const key = `${e.uri}|${e.modified}`;
   const [uri, setUri] = useState<string | null | undefined>(thumbCache.get(key));
   const t = typeOf(e.mime);
   useEffect(() => {
-    if (e.isDir || (t !== 'image' && t !== 'pdf') || thumbCache.has(key)) return;
+    if (locked || e.isDir || (t !== 'image' && t !== 'pdf') || thumbCache.has(key)) return;
     let alive = true;
     GeoAlarm.documentThumbnail(e.uri, e.mime, 320, e.modified || 0).then((r) => {
       thumbCache.set(key, r);
@@ -150,7 +151,13 @@ function Thumb({ e, size, styles }: { e: DocEntry; size: number; styles: ReturnT
     return () => {
       alive = false;
     };
-  }, [key]);
+  }, [key, locked]);
+  if (locked)
+    return (
+      <View style={[styles.thumbIcon, { width: size, height: size }]}>
+        <Text style={{ fontSize: size * 0.42 }}>🔒</Text>
+      </View>
+    );
   if (uri) return <Image source={{ uri }} style={[styles.thumbImg, { width: size, height: size }]} resizeMode="cover" />;
   return (
     <View style={[styles.thumbIcon, { width: size, height: size }]}>
@@ -279,7 +286,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     await saveDocRecent(next);
   };
 
-  const openEntry = (e: DocEntry) => {
+  const openEntry = async (e: DocEntry) => {
     if (selected && !e.isDir) {
       const s = new Set(selected);
       if (s.has(e.uri)) s.delete(e.uri);
@@ -291,6 +298,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       setPath([...path, { uri: e.uri, name: e.name }]);
       return;
     }
+    if (meta[e.uri]?.locked && !(await ensureUnlocked('פתיחת מסמך נעול'))) return;
     if (!GeoAlarm.openDocument(e.uri, e.mime)) {
       Alert.alert('לא ניתן לפתוח', 'הקובץ לא נמצא (אולי הוזז או נמחק), או שאין אפליקציה שפותחת אותו.');
       return;
@@ -413,7 +421,20 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const toggleFav = async (e: DocEntry) => {
     const fav = !meta[e.uri]?.fav;
     const m = await updateMeta(e.uri, { fav, name: e.name, mime: e.mime }, e);
-    if (m && !m.fav && !m.expiry) await updateMeta(e.uri, null);
+    if (m && !m.fav && !m.expiry && !m.locked) await updateMeta(e.uri, null);
+  };
+
+  const toggleLock = async (e: DocEntry) => {
+    const locked = !!meta[e.uri]?.locked;
+    if (locked) {
+      if (!(await ensureUnlocked('ביטול נעילת מסמך'))) return;
+      const m = await updateMeta(e.uri, { locked: false }, e);
+      if (m && !m.fav && !m.expiry) await updateMeta(e.uri, null);
+    } else {
+      if (!(await canLock())) return;
+      await updateMeta(e.uri, { locked: true, name: e.name, mime: e.mime }, e);
+    }
+    closeMenu();
   };
 
   const doRename = async () => {
@@ -629,7 +650,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const clearExpiry = async (e: DocEntry) => {
     cancelRing(docRingId(e.uri));
     const m = await updateMeta(e.uri, { expiry: undefined, remindDays: undefined }, e);
-    if (m && !m.fav) await updateMeta(e.uri, null);
+    if (m && !m.fav && !m.locked) await updateMeta(e.uri, null);
   };
 
   const linkToTask = async (e: DocEntry, taskId: string | null) => {
@@ -666,9 +687,10 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   };
 
   // ---------- multi select ----------
-  const shareSelected = () => {
+  const shareSelected = async () => {
     if (!selected || selected.size === 0) return;
     const list = (current ? entries : results ?? []).filter((e) => selected.has(e.uri));
+    if (list.some((e) => meta[e.uri]?.locked) && !(await ensureUnlocked('שיתוף מסמך נעול'))) return;
     GeoAlarm.shareDocuments(
       list.map((e) => e.uri),
       list.map((e) => e.mime)
@@ -758,6 +780,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     return (
       <View style={styles.badgeRow}>
         {m.fav ? <Text style={styles.favMark}>⭐</Text> : null}
+        {m.locked ? <Text style={styles.favMark}>🔒</Text> : null}
         {ex ? <Text style={[styles.expiryBadge, ex.bad && styles.expiryBad]}>⏰ {ex.text}</Text> : null}
       </View>
     );
@@ -783,7 +806,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       >
         {selected && !e.isDir ? <View style={[styles.check, sel && styles.checkOn]}>{sel ? <Text style={styles.checkMark}>✓</Text> : null}</View> : null}
         <View style={[styles.typeStripe, { backgroundColor: t ? TYPE_COLORS[t] : 'transparent' }]} />
-        <Thumb e={e} size={44} styles={styles} />
+        <Thumb e={e} size={44} styles={styles} locked={!!meta[e.uri]?.locked} />
         <View style={styles.flex1}>
           <Text style={styles.rowTitle} numberOfLines={2}>
             {e.name}
@@ -820,7 +843,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         onLongPress={undefined}
         delayLongPress={300}
       >
-        <Thumb e={e} size={cell - 12} styles={styles} />
+        <Thumb e={e} size={cell - 12} styles={styles} locked={!!meta[e.uri]?.locked} />
         {meta[e.uri]?.fav ? <Text style={styles.tileFav}>⭐</Text> : null}
         {sel ? (
           <View style={[styles.check, styles.checkOn, styles.tileCheck]}>
@@ -908,7 +931,15 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
             onPress={() => setPanel('expiry')}
           />
           <MenuItem styles={styles} label="🔗  צרף למשימה או לפתק" onPress={() => setPanel('link')} />
-          <MenuItem styles={styles} label="📤  שיתוף" onPress={() => GeoAlarm.shareDocument(menu.uri, menu.mime)} />
+          <MenuItem
+            styles={styles}
+            label="📤  שיתוף"
+            onPress={async () => {
+              if (m?.locked && !(await ensureUnlocked('שיתוף מסמך נעול'))) return;
+              GeoAlarm.shareDocument(menu.uri, menu.mime);
+            }}
+          />
+          <MenuItem styles={styles} label={m?.locked ? '🔓  בטל נעילה' : '🔒  נעל (טביעת אצבע)'} onPress={() => toggleLock(menu)} />
           <MenuItem
             styles={styles}
             label="✏️  שינוי שם"

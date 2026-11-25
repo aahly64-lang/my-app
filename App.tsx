@@ -29,12 +29,43 @@ import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
 import DocsTab from './src/DocsTab';
 import { syncGeofences, MIN_RADIUS_M, quietSetup } from './src/geoTask';
-import { exportBackup, pickBackup } from './src/backup';
+import {
+  AutoBackupConfig,
+  BackupData,
+  chooseAutoBackupFolder,
+  disableAutoBackup,
+  exportBackup,
+  loadAutoBackup,
+  pickBackup,
+  readAutoBackup,
+  runAutoBackup,
+} from './src/backup';
+
+/** Everything that goes into a backup, read from storage (safe to call from any listener). */
+async function gatherBackup(): Promise<BackupData> {
+  return {
+    notes: (await loadBoard())?.notes ?? [],
+    categories: [],
+    groups: (await loadGroups()) ?? [],
+    tasks: await loadTasks(),
+    areas: await loadAreas(),
+    alarms: await loadAlarmClocks(),
+    docFolders: await loadDocFolders(),
+    docMeta: await loadDocMeta(),
+    sounds: await loadSounds(),
+    themeMode: await loadThemeMode(),
+    accent: await loadAccent(),
+    journals: await loadJournals(),
+    taskLists: await loadTaskLists(),
+    taskTemplates: await loadTaskTemplates(),
+  };
+}
 import { useAppStyles } from './src/appStyles';
 import { ThemeContext, ThemeMode, paletteFor, useTheme } from './src/theme';
 import StopwatchCard from './src/Stopwatch';
 import { RichText, htmlToPlain, noteBg, plainToHtml } from './src/richNote';
 import NoteScreen from './src/NoteScreen';
+import { canLock, ensureUnlocked, relock } from './src/lock';
 import { installCrashLog, showLastCrash } from './src/crashLog';
 
 installCrashLog();
@@ -448,6 +479,11 @@ function AppInner({
   // Reload areas when returning to the app (the background task may switch off "once" areas).
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (s) => {
+      if (s === 'background') {
+        relock();
+        // Daily automatic backup (only when a folder was chosen; at most once a day).
+        runAutoBackup(gatherBackup).then(setAutoBackup).catch(() => {});
+      }
       if (s === 'active') {
         setAreas(await loadAreas());
         setAlarms(await reconcileAlarms(await loadAlarmClocks()));
@@ -516,7 +552,8 @@ function AppInner({
     setCreateVisible(false);
   };
 
-  const openNote = (note: StickyNote) => {
+  const openNote = async (note: StickyNote) => {
+    if (note.locked && !(await ensureUnlocked('פתיחת פתק נעול'))) return;
     setSelectedNote(note);
     setEditTitle(note.title);
     setEditBody(note.body);
@@ -887,30 +924,46 @@ function AppInner({
 
   const doExport = async () => {
     try {
-      await exportBackup({
-        notes,
-        categories: [],
-        groups: (await loadGroups()) ?? [],
-        tasks: await loadTasks(),
-        areas: await loadAreas(),
-        alarms,
-        docFolders: await loadDocFolders(),
-        docMeta: await loadDocMeta(),
-        sounds: await loadSounds(),
-        themeMode,
-        accent,
-        journals: await loadJournals(),
-        taskLists: await loadTaskLists(),
-        taskTemplates: await loadTaskTemplates(),
-      });
+      await exportBackup(await gatherBackup());
     } catch {
       Alert.alert('הגיבוי נכשל', 'לא הצלחתי ליצור את קובץ הגיבוי.');
     }
   };
 
+  // ---------- automatic backup ----------
+  const [autoBackup, setAutoBackup] = useState<AutoBackupConfig>({ folderUri: null });
+  useEffect(() => {
+    loadAutoBackup().then(setAutoBackup);
+  }, []);
+  const chooseBackupFolder = async () => {
+    const cfg = await chooseAutoBackupFolder();
+    if (!cfg) return;
+    const done = await runAutoBackup(gatherBackup, true);
+    setAutoBackup(done);
+    if (done.lastError) Alert.alert('גיבוי אוטומטי', done.lastError);
+    else Alert.alert('גיבוי אוטומטי פעיל ✓', `נוצר גיבוי ראשון בתיקייה "${done.folderName}". מעכשיו יישמר גיבוי פעם ביום (7 האחרונים נשמרים).`);
+  };
+  const backupNow = async () => {
+    const done = await runAutoBackup(gatherBackup, true);
+    setAutoBackup(done);
+    Alert.alert('גיבוי', done.lastError ?? 'הגיבוי נשמר ✓');
+  };
+  const stopAutoBackup = () =>
+    confirm('גיבוי אוטומטי', 'לכבות את הגיבוי האוטומטי? הקבצים שכבר נשמרו נשארים בתיקייה.', 'כבה', async () => {
+      await disableAutoBackup();
+      setAutoBackup({ folderUri: null });
+    });
+  const restoreFromAuto = async (uri: string) => {
+    const data = await readAutoBackup(uri);
+    if (data) restoreData(data);
+  };
+
   const doImport = async () => {
     const data = await pickBackup();
-    if (!data) return;
+    if (data) restoreData(data);
+  };
+
+  const restoreData = (data: BackupData) => {
     const groups = data.groups.length ? data.groups : migrateCategories(data.categories);
     confirm(
       'שחזור מגיבוי',
@@ -1052,7 +1105,9 @@ function AppInner({
                       {note.done ? <Feather name="check" size={16} color="#FFFFFF" /> : null}
                     </TouchableOpacity>
                   </View>
-                  {note.html ? (
+                  {note.locked ? (
+                    <Text style={[styles.noteBody, styles.mutedText]}>🔒 פתק נעול</Text>
+                  ) : note.html ? (
                     <RichText html={note.html} style={[styles.noteBody, note.done ? styles.mutedText : {}]} numberOfLines={6} />
                   ) : (
                     <Text style={[styles.noteBody, note.done && styles.mutedText]} numberOfLines={4}>
@@ -1061,7 +1116,7 @@ function AppInner({
                   )}
                   {reminderTag(note) ? <Text style={styles.scheduleTag}>{reminderTag(note)}</Text> : null}
                   <DocChips
-                    docs={note.docs}
+                    docs={note.locked ? undefined : note.docs}
                     onRemove={(d) =>
                       setNotes((prev) =>
                         prev.map((n) => (n.id === note.id ? { ...n, docs: (n.docs ?? []).filter((x) => x.uri !== d.uri) } : n))
@@ -1265,6 +1320,20 @@ function AppInner({
         extra={
           selectedNote ? (
             <>
+              <TouchableOpacity
+                style={styles.doneBtn}
+                onPress={async () => {
+                  const n = selectedNote;
+                  if (n.locked) {
+                    if (!(await ensureUnlocked('ביטול נעילת פתק'))) return;
+                  } else if (!(await canLock())) return;
+                  const next = { ...n, locked: !n.locked };
+                  setNotes((prev) => prev.map((x) => (x.id === n.id ? { ...x, locked: next.locked } : x)));
+                  setSelectedNote(next);
+                }}
+              >
+                <Text style={styles.doneBtnText}>{selectedNote.locked ? '🔓 בטל נעילה' : '🔒 נעל פתק (טביעת אצבע)'}</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.doneBtn, selectedNote.done && styles.doneBtnOn]}
                 onPress={() => {
@@ -1534,6 +1603,11 @@ function AppInner({
         }}
         onExport={doExport}
         onImport={doImport}
+        autoBackup={autoBackup}
+        onChooseBackupFolder={chooseBackupFolder}
+        onBackupNow={backupNow}
+        onStopAutoBackup={stopAutoBackup}
+        onRestoreAuto={restoreFromAuto}
         themeMode={themeMode}
         onThemeMode={setThemeMode}
         accent={accent}

@@ -12,8 +12,10 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import { AutoBackupConfig, listAutoBackups } from './backup';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
+import { displayYMD } from './pickers';
 import { ACCENTS, Palette, ThemeMode, cardShadow, useTheme, withFonts } from './theme';
 import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
 
@@ -29,6 +31,11 @@ interface Props {
   onClose: () => void;
   onExport: () => void;
   onImport: () => void;
+  autoBackup: AutoBackupConfig;
+  onChooseBackupFolder: () => void;
+  onBackupNow: () => void;
+  onStopAutoBackup: () => void;
+  onRestoreAuto: (uri: string) => void;
   themeMode: ThemeMode;
   onThemeMode: (m: ThemeMode) => void;
   accent: string;
@@ -117,7 +124,25 @@ function Step({
   );
 }
 
-export default function SetupScreen({ visible, onClose, onExport, onImport, themeMode, onThemeMode, accent, onAccent }: Props) {
+export default function SetupScreen({
+  visible,
+  onClose,
+  onExport,
+  onImport,
+  autoBackup,
+  onChooseBackupFolder,
+  onBackupNow,
+  onStopAutoBackup,
+  onRestoreAuto,
+  themeMode,
+  onThemeMode,
+  accent,
+  onAccent,
+}: Props) {
+  const [autoList, setAutoList] = useState<{ uri: string; date: string }[] | null>(null);
+  useEffect(() => {
+    if (!visible) setAutoList(null);
+  }, [visible]);
   const styles = useStyles();
   const c = useTheme();
   const [status, setStatus] = useState<Status>(EMPTY);
@@ -312,8 +337,54 @@ export default function SetupScreen({ visible, onClose, onExport, onImport, them
 
           <Text style={styles.section}>גיבוי ושחזור</Text>
           <Text style={styles.intro}>
-            כל המידע (פתקים, סרטונים, אזורים) שמור רק בטלפון. מומלץ לגבות מדי פעם ולשמור את הקובץ בדרייב, במייל או בווטסאפ.
+            כל המידע (משימות, פתקים, שעונים, אזורים, סרטונים) שמור רק בטלפון. גיבוי אוטומטי שומר עותק פעם ביום בתיקייה
+            שתבחר – כדאי תיקייה שמסתנכרנת לגוגל דרייב. 7 הגיבויים האחרונים נשמרים.
           </Text>
+          {autoBackup.folderUri ? (
+            <>
+              <Text style={[styles.intro, autoBackup.lastError ? { color: '#D70015' } : null]}>
+                {autoBackup.lastError
+                  ? '⚠️ ' + autoBackup.lastError
+                  : `✓ גיבוי אוטומטי פעיל · תיקייה: ${autoBackup.folderName ?? ''}${
+                      autoBackup.lastAt
+                        ? ` · אחרון: ${new Date(autoBackup.lastAt).toLocaleDateString('he-IL')} ${new Date(autoBackup.lastAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
+                        : ''
+                    }`}
+              </Text>
+              <TouchableOpacity style={styles.backupBtn} onPress={onBackupNow}>
+                <Text style={styles.backupBtnText}>💾 גבה עכשיו</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.backupBtn, styles.restoreBtn]}
+                onPress={async () => setAutoList(autoList ? null : await listAutoBackups())}
+              >
+                <Text style={[styles.backupBtnText, styles.restoreText]}>⬇️ שחזר מגיבוי אוטומטי</Text>
+              </TouchableOpacity>
+              {autoList ? (
+                autoList.length === 0 ? (
+                  <Text style={styles.intro}>לא נמצאו גיבויים בתיקייה.</Text>
+                ) : (
+                  autoList.map((b) => (
+                    <TouchableOpacity key={b.uri} style={styles.soundRow} onPress={() => onRestoreAuto(b.uri)}>
+                      <Text style={styles.stepTitle}>📅 {displayYMD(b.date)}</Text>
+                      <Text style={styles.soundName}>שחזר ◂</Text>
+                    </TouchableOpacity>
+                  ))
+                )
+              ) : null}
+              <TouchableOpacity style={[styles.backupBtn, styles.restoreBtn]} onPress={onChooseBackupFolder}>
+                <Text style={[styles.backupBtnText, styles.restoreText]}>📁 החלף תיקייה</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onStopAutoBackup} style={{ alignSelf: 'center', padding: 8 }}>
+                <Text style={styles.intro}>כבה גיבוי אוטומטי</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <TouchableOpacity style={styles.backupBtn} onPress={onChooseBackupFolder}>
+              <Text style={styles.backupBtnText}>📁 הפעל גיבוי אוטומטי – בחר תיקייה</Text>
+            </TouchableOpacity>
+          )}
+          <Text style={[styles.intro, { marginTop: 14 }]}>גיבוי ידני – קובץ אחד לשליחה או לשמירה:</Text>
           <TouchableOpacity style={styles.backupBtn} onPress={onExport}>
             <Text style={styles.backupBtnText}>⬆️ צור קובץ גיבוי ושתף</Text>
           </TouchableOpacity>
