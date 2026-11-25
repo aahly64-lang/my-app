@@ -39,7 +39,17 @@ import {
   pickBackup,
   readAutoBackup,
   runAutoBackup,
+  buildPayload,
+  parseBackup,
 } from './src/backup';
+import {
+  DriveBackupConfig,
+  connectDrive,
+  disconnectDrive,
+  downloadDriveBackup,
+  loadDriveBackup,
+  runDriveBackup,
+} from './src/driveBackup';
 
 /** Everything that goes into a backup, read from storage (safe to call from any listener). */
 async function gatherBackup(): Promise<BackupData> {
@@ -483,6 +493,7 @@ function AppInner({
         relock();
         // Daily automatic backup (only when a folder was chosen; at most once a day).
         runAutoBackup(gatherBackup).then(setAutoBackup).catch(() => {});
+        runDriveBackup(async () => buildPayload(await gatherBackup())).then(setDriveBackup).catch(() => {});
       }
       if (s === 'active') {
         setAreas(await loadAreas());
@@ -953,6 +964,43 @@ function AppInner({
       await disableAutoBackup();
       setAutoBackup({ folderUri: null });
     });
+  // ---------- Google Drive backup ----------
+  const [driveBackup, setDriveBackup] = useState<DriveBackupConfig>({ enabled: false });
+  useEffect(() => {
+    loadDriveBackup().then(setDriveBackup);
+  }, []);
+  const drivePayload = async () => buildPayload(await gatherBackup());
+  const connectGoogleDrive = async () => {
+    try {
+      await connectDrive();
+    } catch (e: any) {
+      Alert.alert('גוגל דרייב', e?.message ?? 'ההתחברות נכשלה.');
+      return;
+    }
+    const done = await runDriveBackup(drivePayload, true);
+    setDriveBackup(done);
+    if (done.lastError) Alert.alert('גוגל דרייב', done.lastError);
+    else Alert.alert('גיבוי לגוגל דרייב פעיל ✓', 'נוצר גיבוי ראשון בתיקייה "גיבוי יומן ושולחן עבודה" בדרייב שלך. מעכשיו יישמר גיבוי פעם ביום.');
+  };
+  const driveBackupNow = async () => {
+    const done = await runDriveBackup(drivePayload, true);
+    setDriveBackup(done);
+    Alert.alert('גוגל דרייב', done.lastError ?? 'הגיבוי נשמר בדרייב ✓');
+  };
+  const disconnectGoogleDrive = () =>
+    confirm('גוגל דרייב', 'להפסיק לגבות לגוגל דרייב? הגיבויים שכבר נשמרו נשארים בדרייב.', 'הפסק', async () => {
+      await disconnectDrive();
+      setDriveBackup({ enabled: false });
+    });
+  const restoreFromDrive = async (id: string) => {
+    try {
+      const data = parseBackup(await downloadDriveBackup(id));
+      if (data) restoreData(data);
+    } catch (e: any) {
+      Alert.alert('שחזור', e?.message ?? 'ההורדה מגוגל דרייב נכשלה.');
+    }
+  };
+
   const restoreFromAuto = async (uri: string) => {
     const data = await readAutoBackup(uri);
     if (data) restoreData(data);
@@ -1608,6 +1656,11 @@ function AppInner({
         onBackupNow={backupNow}
         onStopAutoBackup={stopAutoBackup}
         onRestoreAuto={restoreFromAuto}
+        driveBackup={driveBackup}
+        onConnectDrive={connectGoogleDrive}
+        onDriveBackupNow={driveBackupNow}
+        onDisconnectDrive={disconnectGoogleDrive}
+        onRestoreDrive={restoreFromDrive}
         themeMode={themeMode}
         onThemeMode={setThemeMode}
         accent={accent}

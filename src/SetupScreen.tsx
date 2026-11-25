@@ -13,6 +13,7 @@ import {
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { AutoBackupConfig, listAutoBackups } from './backup';
+import { DriveBackupConfig, listDriveBackups } from './driveBackup';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
 import { displayYMD } from './pickers';
@@ -36,6 +37,11 @@ interface Props {
   onBackupNow: () => void;
   onStopAutoBackup: () => void;
   onRestoreAuto: (uri: string) => void;
+  driveBackup: DriveBackupConfig;
+  onConnectDrive: () => void;
+  onDriveBackupNow: () => void;
+  onDisconnectDrive: () => void;
+  onRestoreDrive: (id: string) => void;
   themeMode: ThemeMode;
   onThemeMode: (m: ThemeMode) => void;
   accent: string;
@@ -134,15 +140,36 @@ export default function SetupScreen({
   onBackupNow,
   onStopAutoBackup,
   onRestoreAuto,
+  driveBackup,
+  onConnectDrive,
+  onDriveBackupNow,
+  onDisconnectDrive,
+  onRestoreDrive,
   themeMode,
   onThemeMode,
   accent,
   onAccent,
 }: Props) {
   const [autoList, setAutoList] = useState<{ uri: string; date: string }[] | null>(null);
+  const [driveList, setDriveList] = useState<{ id: string; date: string }[] | null>(null);
   useEffect(() => {
-    if (!visible) setAutoList(null);
+    if (!visible) {
+      setAutoList(null);
+      setDriveList(null);
+    }
   }, [visible]);
+  const toggleDriveList = async () => {
+    if (driveList) return setDriveList(null);
+    try {
+      setDriveList(await listDriveBackups());
+    } catch (e: any) {
+      Alert.alert('גוגל דרייב', e?.message ?? 'לא הצלחתי לקרוא את הגיבויים מהדרייב.');
+    }
+  };
+  const stamp = (t?: number) =>
+    t
+      ? ` · אחרון: ${new Date(t).toLocaleDateString('he-IL')} ${new Date(t).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
+      : '';
   const styles = useStyles();
   const c = useTheme();
   const [status, setStatus] = useState<Status>(EMPTY);
@@ -337,28 +364,62 @@ export default function SetupScreen({
 
           <Text style={styles.section}>גיבוי ושחזור</Text>
           <Text style={styles.intro}>
-            כל המידע (משימות, פתקים, שעונים, אזורים, סרטונים) שמור רק בטלפון. גיבוי אוטומטי שומר עותק פעם ביום בתיקייה
-            שתבחר – כדאי תיקייה שמסתנכרנת לגוגל דרייב. 7 הגיבויים האחרונים נשמרים.
+            כל המידע (משימות, פתקים, שעונים, אזורים, סרטונים) שמור רק בטלפון. הגיבוי האוטומטי שומר עותק פעם ביום – בגוגל
+            דרייב, בתיקייה בטלפון, או בשניהם. 7 הגיבויים האחרונים נשמרים בכל מקום.
           </Text>
+
+          <Text style={[styles.stepTitle, { marginTop: 10 }]}>☁️ גוגל דרייב</Text>
+          {driveBackup.enabled ? (
+            <>
+              <Text style={[styles.intro, driveBackup.lastError ? { color: '#D70015' } : null]}>
+                {driveBackup.lastError
+                  ? '⚠️ ' + driveBackup.lastError
+                  : `✓ פעיל · ${driveBackup.email ?? ''}${stamp(driveBackup.lastAt)}`}
+              </Text>
+              <TouchableOpacity style={styles.backupBtn} onPress={onDriveBackupNow}>
+                <Text style={styles.backupBtnText}>☁️ גבה לדרייב עכשיו</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.backupBtn, styles.restoreBtn]} onPress={toggleDriveList}>
+                <Text style={[styles.backupBtnText, styles.restoreText]}>⬇️ שחזר מגוגל דרייב</Text>
+              </TouchableOpacity>
+              {driveList ? (
+                driveList.length === 0 ? (
+                  <Text style={styles.intro}>לא נמצאו גיבויים בדרייב.</Text>
+                ) : (
+                  driveList.map((b) => (
+                    <TouchableOpacity key={b.id} style={styles.soundRow} onPress={() => onRestoreDrive(b.id)}>
+                      <Text style={styles.stepTitle}>📅 {displayYMD(b.date)}</Text>
+                      <Text style={styles.soundName}>שחזר ◂</Text>
+                    </TouchableOpacity>
+                  ))
+                )
+              ) : null}
+              <TouchableOpacity onPress={onDisconnectDrive} style={{ alignSelf: 'center', padding: 8 }}>
+                <Text style={styles.intro}>הפסק גיבוי לדרייב</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <TouchableOpacity style={styles.backupBtn} onPress={onConnectDrive}>
+              <Text style={styles.backupBtnText}>☁️ התחבר לגוגל דרייב</Text>
+            </TouchableOpacity>
+          )}
+
+          <Text style={[styles.stepTitle, { marginTop: 14 }]}>📱 תיקייה בטלפון</Text>
           {autoBackup.folderUri ? (
             <>
               <Text style={[styles.intro, autoBackup.lastError ? { color: '#D70015' } : null]}>
                 {autoBackup.lastError
                   ? '⚠️ ' + autoBackup.lastError
-                  : `✓ גיבוי אוטומטי פעיל · תיקייה: ${autoBackup.folderName ?? ''}${
-                      autoBackup.lastAt
-                        ? ` · אחרון: ${new Date(autoBackup.lastAt).toLocaleDateString('he-IL')} ${new Date(autoBackup.lastAt).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
-                        : ''
-                    }`}
+                  : `✓ פעיל · תיקייה: ${autoBackup.folderName ?? ''}${stamp(autoBackup.lastAt)}`}
               </Text>
               <TouchableOpacity style={styles.backupBtn} onPress={onBackupNow}>
-                <Text style={styles.backupBtnText}>💾 גבה עכשיו</Text>
+                <Text style={styles.backupBtnText}>💾 גבה לטלפון עכשיו</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.backupBtn, styles.restoreBtn]}
                 onPress={async () => setAutoList(autoList ? null : await listAutoBackups())}
               >
-                <Text style={[styles.backupBtnText, styles.restoreText]}>⬇️ שחזר מגיבוי אוטומטי</Text>
+                <Text style={[styles.backupBtnText, styles.restoreText]}>⬇️ שחזר מהטלפון</Text>
               </TouchableOpacity>
               {autoList ? (
                 autoList.length === 0 ? (
@@ -376,12 +437,12 @@ export default function SetupScreen({
                 <Text style={[styles.backupBtnText, styles.restoreText]}>📁 החלף תיקייה</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={onStopAutoBackup} style={{ alignSelf: 'center', padding: 8 }}>
-                <Text style={styles.intro}>כבה גיבוי אוטומטי</Text>
+                <Text style={styles.intro}>הפסק גיבוי לטלפון</Text>
               </TouchableOpacity>
             </>
           ) : (
             <TouchableOpacity style={styles.backupBtn} onPress={onChooseBackupFolder}>
-              <Text style={styles.backupBtnText}>📁 הפעל גיבוי אוטומטי – בחר תיקייה</Text>
+              <Text style={styles.backupBtnText}>📁 בחר תיקייה בטלפון</Text>
             </TouchableOpacity>
           )}
           <Text style={[styles.intro, { marginTop: 14 }]}>גיבוי ידני – קובץ אחד לשליחה או לשמירה:</Text>

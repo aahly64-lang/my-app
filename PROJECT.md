@@ -256,3 +256,9 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - נעילה (lock.ts): ensureUnlocked – טביעת אצבע/קוד הטלפון, פתוח 2 דק' או עד שהאפליקציה עוברת לרקע (relock).
 - פתקים: locked ב-StickyNote; כפתור נעל/בטל נעילה ב-⋯; ברשימה "🔒 פתק נעול" בלי תוכן ומסמכים.
 - מסמכים: locked ב-DocMeta; "🔒 נעל" בתפריט; בלי תמונה ממוזערת; פתיחה ושיתוף (גם מרובה, וגם מצ'יפים במשימות/פתקים) דורשים אימות.
+
+## גרסה 1.11.1 (25/11/2026) – גיבוי לגוגל דרייב
+- גוגל דרייב לא תומך בכתיבה דרך בחירת תיקייה (SAF tree) – בחירה כזו נחסמת עם הסבר. ההנחיה "תיקייה שמסתנכרנת לדרייב" הוסרה (באנדרואיד תיקייה מקומית לא מסתנכרנת).
+- driveBackup.ts: @react-native-google-signin/google-signin 13.3.1 + Drive REST v3, scope drive.file. תיקייה "גיבוי יומן ושולחן עבודה", קובץ board-backup-YYYY-MM-DD.json ביום, 7 אחרונים. רץ עם הגיבוי לטלפון כשהאפליקציה עוברת לרקע.
+- דורש ב-Google Cloud (My Maps Project): Google Drive API מופעל, מסך הסכמה OAuth, ו-OAuth client מסוג Android עם com.avi.personalboard + SHA-1 של debug.keystore. בלי זה: DEVELOPER_ERROR (מוצג כהודעה בעברית).
+- בהגדרות: שני חלקים – ☁️ גוגל דרייב ו-📱 תיקייה בטלפון, לכל אחד גבה עכשיו / שחזר לפי תאריך / הפסק.

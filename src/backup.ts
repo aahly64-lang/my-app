@@ -38,7 +38,7 @@ export interface BackupData {
 
 const BACKUP_APP_ID = 'avi-personal-board';
 
-const buildPayload = (data: BackupData) => ({
+export const buildPayload = (data: BackupData) => ({
   app: BACKUP_APP_ID,
   version: 1,
   exportedAt: new Date().toISOString(),
@@ -74,7 +74,7 @@ export async function pickBackup(): Promise<BackupData | null> {
   }
 }
 
-function parseBackup(raw: string): BackupData | null {
+export function parseBackup(raw: string): BackupData | null {
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || parsed.app !== BACKUP_APP_ID) {
@@ -150,6 +150,13 @@ export async function chooseAutoBackupFolder(): Promise<AutoBackupConfig | null>
   try {
     const r = await SAF.requestDirectoryPermissionsAsync();
     if (!r.granted) return null;
+    if (/com\.google\.android\.apps\.docs|com\.google\.android\.apps\.drive/.test(r.directoryUri)) {
+      Alert.alert(
+        'גוגל דרייב',
+        'גוגל דרייב לא מאפשר לאפליקציות לשמור קבצים דרך בחירת תיקייה. בשביל דרייב השתמש בכפתור "התחבר לגוגל דרייב". כאן בחר תיקייה בזיכרון הטלפון.'
+      );
+      return null;
+    }
     const cfg: AutoBackupConfig = { folderUri: r.directoryUri, folderName: folderLabel(r.directoryUri) };
     await saveAutoBackup(cfg);
     return cfg;
@@ -189,7 +196,7 @@ export async function runAutoBackup(getData: () => Promise<BackupData>, force = 
     await saveAutoBackup(next);
     return next;
   } catch (e: any) {
-    const next = { ...cfg, lastError: 'הגישה לתיקייה אבדה או שהיא נמחקה. בחר תיקייה מחדש.' };
+    const next = { ...cfg, lastError: 'לא הצלחתי לשמור בתיקייה (אולי היא נמחקה או שהגישה בוטלה). בחר תיקייה מחדש.' };
     await saveAutoBackup(next);
     return next;
   }
