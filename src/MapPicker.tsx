@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useScreenFrame } from './ui';
 import MapView, { Circle, MapType, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { MAX_RADIUS_M, MIN_RADIUS_M } from './geoTask';
@@ -67,6 +68,7 @@ export async function searchAddress(q: string): Promise<Result[]> {
 }
 
 export default function MapPicker({ visible, initial, fallbackCenter, onClose, onSave }: Props) {
+  const frame = useScreenFrame();
   const mapRef = useRef<MapView>(null);
   const [center, setCenter] = useState<{ lat: number; lon: number } | null>(null);
   const [radius, setRadius] = useState(250);
@@ -140,7 +142,7 @@ export default function MapPicker({ visible, initial, fallbackCenter, onClose, o
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={styles.root}>
+      <View style={[styles.root, frame.root]}>
         {visible ? (
           <MapView
             ref={mapRef}

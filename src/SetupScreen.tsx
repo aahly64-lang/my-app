@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useScreenFrame } from './ui';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { AutoBackupConfig, listAutoBackups } from './backup';
@@ -150,6 +151,7 @@ export default function SetupScreen({
   accent,
   onAccent,
 }: Props) {
+  const frame = useScreenFrame();
   const [autoList, setAutoList] = useState<{ uri: string; date: string }[] | null>(null);
   const [driveList, setDriveList] = useState<{ id: string; date: string }[] | null>(null);
   useEffect(() => {
@@ -244,14 +246,14 @@ export default function SetupScreen({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={[styles.safe, frame.root]}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>הגדרות וגיבוי</Text>
           <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
             <Text style={styles.closeText}>✕</Text>
           </TouchableOpacity>
         </View>
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={[styles.content, { paddingBottom: frame.bottomSpace }]}>
           <Text style={styles.section}>מראה</Text>
           <View style={styles.themeRow}>
             {(

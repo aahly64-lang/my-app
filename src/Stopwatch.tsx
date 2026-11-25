@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useScreenFrame } from './ui';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAppStyles } from './appStyles';
 import { displayYMD, hhmm, pickDate, pickTimeWheels } from './pickers';
@@ -329,6 +330,7 @@ function JournalsScreen({
   onChange: (j: Journal[]) => void;
   onClose: () => void;
 }) {
+  const frame = useScreenFrame();
   const styles = useThemedStyles(makeStyles);
   const app = useAppStyles();
   const c = useTheme();
@@ -372,7 +374,7 @@ function JournalsScreen({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={() => (openId ? setOpenId(null) : onClose())}>
-      <View style={styles.screen}>
+      <View style={[styles.screen, frame.root]}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => (openId ? setOpenId(null) : onClose())} hitSlop={12}>
             <Text style={styles.headerBtn}>{openId ? '→' : '✕'}</Text>
@@ -390,7 +392,7 @@ function JournalsScreen({
         </View>
 
         {!open ? (
-          <ScrollView contentContainerStyle={styles.content}>
+          <ScrollView contentContainerStyle={[styles.content, { paddingBottom: frame.bottomSpace }]}>
             {journals.length === 0 ? (
               <Text style={app.emptyText}>
                 עדיין אין יומנים. עצור את הסטופר ולחץ "שמור ליומן" כדי ליצור יומן ראשון בשם שתבחר.

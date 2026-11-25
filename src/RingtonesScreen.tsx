@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useScreenFrame } from './ui';
 import { Gesture, GestureDetector, GestureHandlerRootView, ScrollView } from 'react-native-gesture-handler';
 import * as DocumentPicker from 'expo-document-picker';
 import { GeoAlarm } from '../modules/geo-alarm';
@@ -76,6 +77,7 @@ interface Props {
 }
 
 export default function RingtonesScreen({ visible, onClose }: Props) {
+  const frame = useScreenFrame();
   const c = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [list, setList] = useState<MyRingtone[]>([]);
@@ -304,7 +306,7 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={draft ? () => setDraft(null) : close}>
-      <GestureHandlerRootView style={styles.screen}>
+      <GestureHandlerRootView style={[styles.screen, frame.root]}>
         <View style={styles.header}>
           <Text style={styles.title}>🎵 הצלצולים שלי</Text>
           <TouchableOpacity onPress={draft ? () => setDraft(null) : close} style={styles.closeBtn} hitSlop={10}>
@@ -329,7 +331,7 @@ export default function RingtonesScreen({ visible, onClose }: Props) {
             c={c}
           />
         ) : (
-          <ScrollView contentContainerStyle={styles.content}>
+          <ScrollView contentContainerStyle={[styles.content, { paddingBottom: frame.bottomSpace }]}>
             <TouchableOpacity style={styles.bigBtn} onPress={pickFile}>
               <Text style={styles.bigBtnText}>➕ צלצול חדש מקובץ שמע</Text>
             </TouchableOpacity>

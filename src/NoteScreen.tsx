@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useScreenFrame } from './ui';
 import { Feather } from '@expo/vector-icons';
 import { saveCrash } from './crashLog';
 import { NoteColorPicker, NoteEditor, noteBg } from './richNote';
@@ -43,6 +44,7 @@ export default function NoteScreen({
   onShare?: () => void;
   extra?: React.ReactNode; // buttons for an existing note (done / to task / delete)
 }) {
+  const frame = useScreenFrame();
   const c = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [options, setOptions] = useState(false);
@@ -55,7 +57,7 @@ export default function NoteScreen({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={() => (options ? setOptions(false) : onClose())}>
-      <View style={[styles.root, { backgroundColor: bg }]}>
+      <View style={[styles.root, { backgroundColor: bg }, frame.root]}>
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} hitSlop={12} style={styles.iconBtn}>
             <Text style={styles.iconText}>✕</Text>

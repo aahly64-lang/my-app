@@ -4,6 +4,16 @@ import { useAppStyles } from './appStyles';
 import { DAY_LETTERS, displayYMD, hhmm, parseHHMM, pickDate, pickTimeWheels } from './pickers';
 import { localDateString } from './storage';
 
+/**
+ * Full-screen Modals on Android can come out taller than the visible area (status bar /
+ * navigation bar drawn over them), which hides the bottom of their content. Cap the root
+ * at the window height and leave generous room at the bottom of scrolling content.
+ */
+export function useScreenFrame() {
+  const { height } = useWindowDimensions();
+  return { root: { maxHeight: height }, bottomSpace: 140 };
+}
+
 export function confirm(title: string, message: string, confirmText: string, onConfirm: () => void) {
   Alert.alert(title, message, [
     { text: 'ביטול', style: 'cancel' },

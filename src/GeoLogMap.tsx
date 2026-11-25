@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useScreenFrame } from './ui';
 import MapView, { Circle, MapType, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { AlarmArea, GeoLogEntry } from './storage';
 import { MAP_TYPES } from './MapPicker';
@@ -23,6 +24,7 @@ export default function GeoLogMap({
   areas: AlarmArea[];
   onClose: () => void;
 }) {
+  const frame = useScreenFrame();
   const [mapType, setMapType] = useState<MapType>('standard');
   const pts = entries.filter((e) => e.lat != null && e.lon != null);
   const all = [
@@ -37,7 +39,7 @@ export default function GeoLogMap({
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1 }}>
+      <View style={[{ flex: 1 }, frame.root]}>
         {visible ? (
           <MapView
             provider={PROVIDER_GOOGLE}

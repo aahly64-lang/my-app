@@ -262,3 +262,8 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - driveBackup.ts: @react-native-google-signin/google-signin 13.3.1 + Drive REST v3, scope drive.file. תיקייה "גיבוי יומן ושולחן עבודה", קובץ board-backup-YYYY-MM-DD.json ביום, 7 אחרונים. רץ עם הגיבוי לטלפון כשהאפליקציה עוברת לרקע.
 - דורש ב-Google Cloud (My Maps Project): Google Drive API מופעל, מסך הסכמה OAuth, ו-OAuth client מסוג Android עם com.avi.personalboard + SHA-1 של debug.keystore. בלי זה: DEVELOPER_ERROR (מוצג כהודעה בעברית).
 - בהגדרות: שני חלקים – ☁️ גוגל דרייב ו-📱 תיקייה בטלפון, לכל אחד גבה עכשיו / שחזר לפי תאריך / הפסק.
+
+## גרסה 1.11.2 (25/11/2026) – גלילה במסכים מלאים
+- בהגדרות לא היה אפשר לגלול עד הסוף (הגיבוי הידני הוסתר). כנראה המסך המלא (Modal) יוצא גבוה מהשטח הנראה באנדרואיד (שורת סטטוס/ניווט מעליו).
+- useScreenFrame ב-ui.tsx: maxHeight = גובה החלון לשורש, ו-paddingBottom 140 לתוכן הנגלל. הוחל על הגדרות, רינגטונים, יומני סטופר, מפת יומן, בוחר מפה, פתק מלא.
+- Google Cloud: Drive API מופעל, מסך הסכמה "יומן ושולחן עבודה" (External, Testing, משתמש בדיקה aahly64@gmail.com), OAuth client Android "Personal Board Android". מעבר ל-Production דורש דף בית ומדיניות פרטיות.
