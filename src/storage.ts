@@ -393,6 +393,9 @@ export const loadDocRecent = async () => (await readJson<RecentDoc[]>(DOC_RECENT
 export const saveDocRecent = (r: RecentDoc[]) => writeJson(DOC_RECENT_KEY, r);
 export const loadDocView = async () => ((await readJson<string>(DOC_VIEW_KEY)) as 'list' | 'grid' | null) ?? 'list';
 export const saveDocView = (v: 'list' | 'grid') => writeJson(DOC_VIEW_KEY, v);
+export const DOC_SAVE_FOLDER_KEY = '@avi_doc_save_folder_v1'; // last folder a scan / shared file was saved to
+export const loadDocSaveFolder = () => readJson<string>(DOC_SAVE_FOLDER_KEY);
+export const saveDocSaveFolder = (uri: string) => writeJson(DOC_SAVE_FOLDER_KEY, uri);
 
 // ---------- stopwatch & journals ----------
 

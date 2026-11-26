@@ -16,6 +16,7 @@ import { DAY_LETTERS, displayYMD, hhmm, parseHHMM, parseYMD, pickDate, pickTimeW
 import { cancelRing, scheduleReminder, taskRingId } from './rings';
 import { syncGeofences } from './geoTask';
 import { DocChips } from './docLinks';
+import { scanAndSave, useSaveDocs } from './SaveDocs';
 import {
   AlarmArea,
   Task,
@@ -117,6 +118,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
 
   // edit popup
   const [edit, setEdit] = useState<Task | null>(null);
+  const saver = useSaveDocs();
   const [reminder, setReminder] = useState<ReminderValue>(emptyReminder());
   const [newSub, setNewSub] = useState('');
 
@@ -318,6 +320,12 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
     } catch {
       Alert.alert('תמונה', 'לא הצלחתי לצרף את התמונה.');
     }
+  };
+
+  /** Scan a document straight into the task being edited. */
+  const scanToTask = async () => {
+    const d = await scanAndSave(saver);
+    if (d) setEdit((e) => (e ? { ...e, docs: [...(e.docs ?? []).filter((x) => x.uri !== d.uri), d] } : e));
   };
 
   const complete = async (t: Task) => {
@@ -790,6 +798,9 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
               docs={edit.docs}
               onRemove={(d) => setEdit({ ...edit, docs: (edit.docs ?? []).filter((x) => x.uri !== d.uri) })}
             />
+            <TouchableOpacity style={[styles.pickerBtnPlain, { marginTop: 8, marginBottom: 8 }]} onPress={scanToTask}>
+              <Text style={styles.pickerBtnPlainText}>📄 סרוק מסמך וצרף למשימה</Text>
+            </TouchableOpacity>
             <View style={styles.switchRowPlain}>
               <Text style={styles.label}>⭐ חשובה</Text>
               <Switch
@@ -1184,7 +1195,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
           </TouchableOpacity>
         ) : null}
         <Text style={styles.hintText}>
-          התראה בכל בוקר עם המשימות של היום ומה שבאיחור. בימים בלי משימות לא תגיע התראה.
+          התראה בכל בוקר עם המשימות של היום, מה שבאיחור, ומסמכים שתוקפם מסתיים בשבועיים הקרובים. בימים בלי משימות ובלי מסמכים כאלה לא תגיע התראה.
         </Text>
       </PopupShell>
 
@@ -1193,6 +1204,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
           {photo ? <Image source={{ uri: photo }} style={{ width: '100%', height: '85%' }} resizeMode="contain" /> : null}
         </TouchableOpacity>
       </Modal>
+      {saver.element}
     </View>
   );
 }

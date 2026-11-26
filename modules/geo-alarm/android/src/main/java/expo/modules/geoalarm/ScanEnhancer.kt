@@ -2,6 +2,7 @@ package expo.modules.geoalarm
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorMatrix
@@ -132,6 +133,115 @@ object ScanEnhancer {
     } finally {
       tmp.delete()
     }
+  }
+
+  /**
+   * Builds one PDF from PDFs and images, in order (merge, "add pages", photos to PDF). PDF pages are rendered
+   * page by page (keeping their /Rotate), images are turned upright from EXIF. Writes over [overwrite] when given
+   * (returns it), otherwise into the cache (returns a file uri). Null on failure.
+   */
+  fun combine(ctx: Context, uris: List<String>, mimes: List<String>, quality: String, overwrite: String?): String? {
+    val (maxSide, q) = preset(quality)
+    val jpegs = ArrayList<Triple<ByteArray, Int, Int>>()
+    try {
+      for ((idx, u) in uris.withIndex()) {
+        val mime = mimes.getOrElse(idx) { "" }
+        val uri = Uri.parse(u)
+        if (mime.contains("pdf")) {
+          val tmp = File(ctx.cacheDir, "cmb-${System.currentTimeMillis()}-$idx.pdf")
+          try {
+            ctx.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } } ?: return null
+            val pfd = ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = PdfRenderer(pfd)
+            val rotations = pageRotations(tmp, renderer.pageCount) ?: IntArray(renderer.pageCount)
+            try {
+              for (i in 0 until renderer.pageCount) {
+                val page = renderer.openPage(i)
+                try {
+                  val scale = maxSide.toFloat() / maxOf(page.width, page.height)
+                  val w = (page.width * scale).toInt().coerceAtLeast(1)
+                  val h = (page.height * scale).toInt().coerceAtLeast(1)
+                  val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                  bmp.eraseColor(Color.WHITE)
+                  page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                  val deg = ((rotations[i] % 360) + 360) % 360
+                  val upright = if (deg == 0) bmp else {
+                    val r = Bitmap.createBitmap(bmp, 0, 0, w, h, Matrix().apply { postRotate(deg.toFloat()) }, true)
+                    if (r !== bmp) bmp.recycle()
+                    r
+                  }
+                  jpegs.add(Triple(toJpeg(upright, q), upright.width, upright.height))
+                  upright.recycle()
+                } finally {
+                  page.close()
+                }
+              }
+            } finally {
+              renderer.close()
+              pfd.close()
+            }
+          } finally {
+            tmp.delete()
+          }
+        } else {
+          val img = loadImage(ctx, uri, maxSide) ?: return null
+          jpegs.add(Triple(toJpeg(img, q), img.width, img.height))
+          img.recycle()
+        }
+      }
+      if (jpegs.isEmpty()) return null
+      if (!overwrite.isNullOrBlank()) {
+        val dest = Uri.parse(overwrite)
+        val out = ctx.contentResolver.openOutputStream(dest, "wt") ?: return null
+        out.use { writePdf(it, jpegs) }
+        return overwrite
+      }
+      val file = File(ctx.cacheDir, "pdf-${System.currentTimeMillis()}.pdf")
+      FileOutputStream(file).use { writePdf(it, jpegs) }
+      return Uri.fromFile(file).toString()
+    } catch (e: Throwable) {
+      return null
+    }
+  }
+
+  /** Decodes an image no bigger than maxSide, turned upright from its EXIF orientation, on a white background. */
+  private fun loadImage(ctx: Context, uri: Uri, maxSide: Int): Bitmap? {
+    val cr = ctx.contentResolver
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    val opened = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds); true } ?: false
+    if (!opened) return null
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2
+    val raw = cr.openInputStream(uri)?.use {
+      BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+    } ?: return null
+    val orientation = try {
+      cr.openInputStream(uri)?.use {
+        android.media.ExifInterface(it).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+      } ?: android.media.ExifInterface.ORIENTATION_NORMAL
+    } catch (e: Throwable) {
+      android.media.ExifInterface.ORIENTATION_NORMAL
+    }
+    val m = Matrix()
+    when (orientation) {
+      android.media.ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
+      android.media.ExifInterface.ORIENTATION_ROTATE_180 -> m.postRotate(180f)
+      android.media.ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(270f)
+      android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> m.postScale(-1f, 1f)
+      android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> m.postScale(1f, -1f)
+      android.media.ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.postScale(-1f, 1f) }
+      android.media.ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(270f); m.postScale(-1f, 1f) }
+    }
+    val scale = minOf(1f, maxSide.toFloat() / maxOf(raw.width, raw.height))
+    if (scale < 1f) m.postScale(scale, scale)
+    val turned = if (m.isIdentity) raw else Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true).also { if (it !== raw) raw.recycle() }
+    // transparent PNGs: flatten on white so the JPEG isn't black
+    val flat = Bitmap.createBitmap(turned.width, turned.height, Bitmap.Config.ARGB_8888)
+    flat.eraseColor(Color.WHITE)
+    Canvas(flat).drawBitmap(turned, 0f, 0f, null)
+    turned.recycle()
+    return flat
   }
 
   /**

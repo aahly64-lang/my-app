@@ -19,11 +19,13 @@ import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import { GeoAlarm } from './modules/geo-alarm';
+import { GeoAlarm, SharedFile } from './modules/geo-alarm';
 import MapPicker, { MapSelection } from './src/MapPicker';
 import GeoLogMap from './src/GeoLogMap';
 import RingtonesScreen from './src/RingtonesScreen';
 import { DocChips } from './src/docLinks';
+import { scanAndSave, useSaveDocs } from './src/SaveDocs';
+import { refreshMorning } from './src/morning';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
@@ -340,6 +342,8 @@ function AppInner({
   const [dataVersion, setDataVersion] = useState(0);
   const [tasksBadge, setTasksBadge] = useState(0);
   const [shared, setShared] = useState<SharedLink | null>(null);
+  const [incomingFiles, setIncomingFiles] = useState<SharedFile[] | null>(null);
+  const noteSaver = useSaveDocs();
   const [loaded, setLoaded] = useState(false);
   const [setupVisible, setSetupVisible] = useState(false);
   const [permissionsOk, setPermissionsOk] = useState(true);
@@ -504,6 +508,7 @@ function AppInner({
         setAlarms(await reconcileAlarms(await loadAlarmClocks()));
         setTasksBadge(countDueToday(await loadTasks()));
         refreshPermissions();
+        refreshMorning();
       }
     });
     return () => sub.remove();
@@ -526,6 +531,19 @@ function AppInner({
     const sub = GeoAlarm.addSharedTextListener(handleSharedText);
     return () => sub.remove();
   }, [handleSharedText]);
+
+  // ---------- files shared into the app (WhatsApp, mail, gallery…) → documents tab ----------
+
+  useEffect(() => {
+    const take = (files: SharedFile[]) => {
+      if (!files.length) return;
+      setActiveTab('docs');
+      setIncomingFiles(files);
+    };
+    GeoAlarm.getInitialSharedFiles().then(take);
+    const sub = GeoAlarm.addSharedFilesListener(take);
+    return () => sub.remove();
+  }, []);
 
   // ---------- notes ----------
 
@@ -1150,6 +1168,8 @@ function AppInner({
         <DocsTab
           dataVersion={dataVersion}
           notes={notes.map((n) => ({ id: n.id, title: n.title }))}
+          incoming={incomingFiles}
+          onIncomingDone={() => setIncomingFiles(null)}
           onAttachToNote={(noteId, link) =>
             setNotes((prev) =>
               prev.map((n) =>
@@ -1416,6 +1436,27 @@ function AppInner({
         extra={
           selectedNote ? (
             <>
+              <DocChips
+                docs={selectedNote.locked ? undefined : notes.find((n) => n.id === selectedNote.id)?.docs}
+                onRemove={(d) =>
+                  setNotes((prev) =>
+                    prev.map((n) => (n.id === selectedNote.id ? { ...n, docs: (n.docs ?? []).filter((x) => x.uri !== d.uri) } : n))
+                  )
+                }
+              />
+              <TouchableOpacity
+                style={styles.doneBtn}
+                onPress={async () => {
+                  const id = selectedNote.id;
+                  const d = await scanAndSave(noteSaver);
+                  if (d)
+                    setNotes((prev) =>
+                      prev.map((n) => (n.id === id ? { ...n, docs: [...(n.docs ?? []).filter((x) => x.uri !== d.uri), d] } : n))
+                    );
+                }}
+              >
+                <Text style={styles.doneBtnText}>📄 סרוק מסמך וצרף לפתק</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={styles.doneBtn}
                 onPress={async () => {
@@ -1451,6 +1492,8 @@ function AppInner({
           ) : null
         }
       />
+
+      {noteSaver.element}
 
       {/* ---------- popup: area details ---------- */}
       <PopupShell

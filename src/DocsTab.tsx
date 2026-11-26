@@ -11,14 +11,17 @@ import {
   View,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { DocEntry, GeoAlarm } from '../modules/geo-alarm';
+import { DocEntry, GeoAlarm, SharedFile } from '../modules/geo-alarm';
 import { Palette, cardShadow, useTheme, useThemedStyles } from './theme';
 import { PopupShell, confirm } from './ui';
 import { docIcon } from './docLinks';
 import { displayYMD, pickDate } from './pickers';
 import { canLock, ensureUnlocked } from './lock';
 import { cancelRing, scheduleReminder } from './rings';
+import { refreshMorning } from './morning';
+import { PendingFile, scanAndSave, scanName, useSaveDocs } from './SaveDocs';
 import {
   DocFolder,
   DocLink,
@@ -172,9 +175,12 @@ interface Props {
   dataVersion: number;
   notes: { id: string; title: string }[];
   onAttachToNote: (noteId: string, link: DocLink) => void;
+  /** files shared into the app from WhatsApp / mail…, waiting to be saved */
+  incoming?: SharedFile[] | null;
+  onIncomingDone?: () => void;
 }
 
-export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
+export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone }: Props) {
   const c = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [folders, setFolders] = useState<DocFolder[]>([]);
@@ -192,10 +198,10 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
   const [meta, setMeta] = useState<Record<string, DocMeta>>({});
   const [recent, setRecent] = useState<RecentDoc[]>([]);
   const [menu, setMenu] = useState<DocEntry | null>(null);
-  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link' | 'rotate'>('menu');
+  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages'>('menu');
+  const saver = useSaveDocs();
   const [renameText, setRenameText] = useState('');
   const [selected, setSelected] = useState<Set<string> | null>(null); // multi-select
-  const [scanPick, setScanPick] = useState<{ uri: string; name: string } | null>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null); // name being typed
   const [newFolderParent, setNewFolderParent] = useState<DocFolder | null>(null); // home: where to create
   const [scanBusy, setScanBusy] = useState(false);
@@ -368,47 +374,118 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     });
   };
 
-  // ---------- scanning ----------
-  const scan = async () => {
-    if (folders.length === 0) {
-      Alert.alert('סריקת מסמך', 'קודם חבר תיקייה שבה יישמרו הסריקות (למשל "מסמכים").');
+  // ---------- scanning / new PDFs ----------
+  const afterSaved = (saved: DocLink[] | null, what: string) => {
+    if (!saved || !saved.length) return;
+    refresh();
+    const rec = [
+      ...saved.map((d, i) => ({ ...d, at: Date.now() - i })),
+      ...recent.filter((r) => !saved.some((d) => d.uri === r.uri)),
+    ].slice(0, 20);
+    setRecent(rec);
+    saveDocRecent(rec);
+    if (saved.length > 1) {
+      Alert.alert('נשמר ✓', `${saved.length} קבצים נשמרו.`);
       return;
     }
-    let r: { uri: string; pages: number } | null = null;
-    setScanBusy(true);
-    try {
-      r = await GeoAlarm.scanDocument(quality);
-    } catch (e: any) {
-      Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (e?.message ?? ''));
-      return;
-    } finally {
-      setScanBusy(false);
-    }
-    if (!r) return;
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, '0');
-    const name = `סריקה ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}`;
-    if (current) await saveScan(r.uri, name, current);
-    else if (folders.length === 1) await saveScan(r.uri, name, folders[0]);
-    else setScanPick({ uri: r.uri, name });
-  };
-
-  const saveScan = async (src: string, name: string, folder: DocFolder) => {
-    setScanPick(null);
-    const created = await GeoAlarm.copyIntoFolder(src, folder.uri, name + '.pdf', 'application/pdf');
-    if (!created) {
-      Alert.alert('סריקת מסמך', `לא הצלחתי לשמור בתיקייה "${folder.name}". ייתכן שאין הרשאת כתיבה – נתק וחבר אותה שוב.`);
-      return;
-    }
-    if (current) refresh();
-    const entry: DocEntry = { uri: created, name: name + '.pdf', mime: 'application/pdf', isDir: false, size: 0, modified: Date.now() };
-    rememberOpen(entry);
-    Alert.alert('נשמר ✓', `"${name}.pdf" נשמר בתיקייה "${folder.name}".`, [
+    const d = saved[0];
+    const entry: DocEntry = { uri: d.uri, name: d.name, mime: d.mime, isDir: false, size: 0, modified: Date.now() };
+    Alert.alert('נשמר ✓', `${what} "${d.name}" נשמר.`, [
       { text: 'סגור', style: 'cancel' },
       { text: 'פעולות נוספות', onPress: () => openMenu(entry) },
-      { text: 'פתח', onPress: () => GeoAlarm.openDocument(created, 'application/pdf') },
+      { text: 'פתח', onPress: () => GeoAlarm.openDocument(d.uri, d.mime) },
     ]);
   };
+
+  const scan = async () => {
+    const d = await scanAndSave(saver, current);
+    afterSaved(d ? [d] : null, 'הסריקה');
+  };
+
+  /** Photos from the gallery, in the order picked, into one PDF. */
+  const pickImages = async (): Promise<PendingFile[] | null> => {
+    const r = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      orderedSelection: true,
+      selectionLimit: 30,
+      quality: 1,
+    });
+    if (r.canceled || !r.assets?.length) return null;
+    return r.assets.map((a, i) => ({ src: a.uri, name: a.fileName || `תמונה ${i + 1}.jpg`, mime: a.mimeType || 'image/jpeg' }));
+  };
+
+  const imagesToPdf = async () => {
+    const imgs = await pickImages();
+    if (!imgs) return;
+    const pdf = await saver.busy('⏳ בונה PDF מהתמונות…', () =>
+      GeoAlarm.combinePdf(imgs.map((f) => f.src), imgs.map((f) => f.mime), quality === 'original' ? 'normal' : quality)
+    );
+    if (!pdf) {
+      Alert.alert('תמונות ל-PDF', 'לא הצלחתי לבנות את הקובץ.');
+      return;
+    }
+    const saved = await saver.ask({
+      title: `🖼️ ${imgs.length === 1 ? 'תמונה' : `${imgs.length} תמונות`} ל-PDF`,
+      files: [{ src: pdf, name: scanName().replace('סריקה', 'תמונות') + '.pdf', mime: 'application/pdf' }],
+      folder: current,
+    });
+    afterSaved(saved, 'הקובץ');
+  };
+
+  /** Adds scanned pages / photos at the end of an existing PDF (the file itself is rewritten). */
+  const addPages = async (e: DocEntry, from: 'scan' | 'gallery') => {
+    closeMenu();
+    let extra: PendingFile[] | null = null;
+    if (from === 'scan') {
+      try {
+        const r = await saver.busy('⏳ משפר את הדפים הסרוקים…', () => GeoAlarm.scanDocument(quality));
+        if (r) extra = [{ src: r.uri, name: 'scan.pdf', mime: 'application/pdf' }];
+      } catch (err: any) {
+        Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (err?.message ?? ''));
+        return;
+      }
+    } else extra = await pickImages();
+    if (!extra) return;
+    const ok = await saver.busy('⏳ מוסיף את העמודים…', () =>
+      GeoAlarm.combinePdf(
+        [e.uri, ...extra!.map((f) => f.src)],
+        [e.mime, ...extra!.map((f) => f.mime)],
+        quality === 'original' ? 'normal' : quality,
+        e.uri
+      )
+    );
+    if (!ok) {
+      Alert.alert('הוספת עמודים', 'לא הצלחתי לעדכן את הקובץ. ייתכן שאין הרשאת כתיבה לתיקייה.');
+      return;
+    }
+    refresh();
+    Alert.alert('עודכן ✓', `העמודים נוספו בסוף "${e.name}".`, [
+      { text: 'סגור', style: 'cancel' },
+      { text: 'פתח', onPress: () => GeoAlarm.openDocument(e.uri, e.mime) },
+    ]);
+  };
+
+  // files shared into the app ("Share" → our app, from WhatsApp, mail, gallery…)
+  useEffect(() => {
+    if (!incoming || !incoming.length) return;
+    let alive = true;
+    (async () => {
+      const saved = await saver.ask({
+        title: incoming.length === 1 ? '📥 שמירת קובץ שהתקבל' : `📥 שמירת ${incoming.length} קבצים שהתקבלו`,
+        files: incoming.map((f) => ({ src: f.uri, name: f.name, mime: f.mime })),
+        folder: current,
+        mergeable: true,
+      });
+      if (!alive) return;
+      onIncomingDone?.();
+      afterSaved(saved, 'הקובץ');
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming]);
 
   // ---------- item menu ----------
   const openMenu = (e: DocEntry) => {
@@ -636,6 +713,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     pickDate(meta[e.uri]?.expiry, async (ymd) => {
       const m = await updateMeta(e.uri, { expiry: ymd, remindDays: meta[e.uri]?.remindDays ?? 30, name: e.name, mime: e.mime }, e);
       if (m) await scheduleExpiry(e.uri, m);
+      refreshMorning();
     }, false);
   };
 
@@ -651,6 +729,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
     cancelRing(docRingId(e.uri));
     const m = await updateMeta(e.uri, { expiry: undefined, remindDays: undefined }, e);
     if (m && !m.fav && !m.locked) await updateMeta(e.uri, null);
+    refreshMorning();
   };
 
   const linkToTask = async (e: DocEntry, taskId: string | null) => {
@@ -696,6 +775,35 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       list.map((e) => e.mime)
     );
   };
+  /** Selected PDFs / images (in the order they were picked) into one new PDF. */
+  const mergeSelected = async () => {
+    if (!selected || selected.size === 0) return;
+    const pool = new Map<string, DocEntry>();
+    [...recentShown, ...favs, ...(results ?? []), ...entries].forEach((e) => pool.set(e.uri, e));
+    const list = [...selected].map((u) => pool.get(u)).filter((e): e is DocEntry => !!e);
+    if (!list.length) return;
+    if (list.some((e) => !(e.mime.includes('pdf') || e.mime.startsWith('image/')))) {
+      Alert.alert('איחוד ל-PDF', 'אפשר לאחד רק קבצי PDF ותמונות.');
+      return;
+    }
+    if (list.some((e) => meta[e.uri]?.locked) && !(await ensureUnlocked('איחוד מסמך נעול'))) return;
+    const pdf = await saver.busy('⏳ מאחד לקובץ אחד…', () =>
+      GeoAlarm.combinePdf(list.map((e) => e.uri), list.map((e) => e.mime), quality === 'original' ? 'normal' : quality)
+    );
+    if (!pdf) {
+      Alert.alert('איחוד ל-PDF', 'לא הצלחתי לאחד את הקבצים.');
+      return;
+    }
+    const first = list[0].name.replace(/\.[^.]+$/, '');
+    const saved = await saver.ask({
+      title: `📕 איחוד ${list.length} קבצים ל-PDF`,
+      files: [{ src: pdf, name: (list.length > 1 ? `${first} - מאוחד` : first) + '.pdf', mime: 'application/pdf' }],
+      folder: current,
+    });
+    if (saved?.length) setSelected(null);
+    afterSaved(saved, 'הקובץ');
+  };
+
   const deleteSelected = () => {
     if (!selected || selected.size === 0) return;
     confirm('מחיקת קבצים', `למחוק ${selected.size} קבצים מהטלפון? אי אפשר לבטל את זה.`, 'מחק', async () => {
@@ -909,6 +1017,9 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
           <Text style={styles.selectBtnText}>📂 העבר</Text>
         </TouchableOpacity>
       ) : null}
+      <TouchableOpacity style={styles.selectBtn} onPress={mergeSelected}>
+        <Text style={styles.selectBtnText}>📕 ל-PDF</Text>
+      </TouchableOpacity>
       <TouchableOpacity style={styles.selectBtn} onPress={deleteSelected}>
         <Text style={[styles.selectBtnText, styles.danger]}>🗑️ מחק</Text>
       </TouchableOpacity>
@@ -958,9 +1069,20 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
           />
           {current ? <MenuItem styles={styles} label="📂  העבר אל…" onPress={() => openMoveTo([menu])} /> : null}
           {menu.mime === 'application/pdf' ? (
+            <MenuItem styles={styles} label="➕  הוסף עמודים" onPress={() => setPanel('pages')} />
+          ) : null}
+          {menu.mime === 'application/pdf' ? (
             <MenuItem styles={styles} label="🔄  סובב עמודים" onPress={() => setPanel('rotate')} />
           ) : null}
           <MenuItem styles={styles} label="🗑️  מחיקה" danger onPress={() => doDelete(menu)} />
+        </>
+      ) : null}
+
+      {menu && panel === 'pages' ? (
+        <>
+          <Text style={styles.popupHint}>העמודים החדשים יתווספו בסוף הקובץ.</Text>
+          <MenuItem styles={styles} label="📷  סרוק עמודים" onPress={() => addPages(menu, 'scan')} />
+          <MenuItem styles={styles} label="🖼️  תמונות מהגלריה" onPress={() => addPages(menu, 'gallery')} />
         </>
       ) : null}
 
@@ -1034,15 +1156,6 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       ) : null}
 
       {menu && panel === 'link' ? <LinkPanel e={menu} notes={notes} styles={styles} onTask={linkToTask} onNote={linkToNote} /> : null}
-    </PopupShell>
-  );
-
-  const scanPopup = (
-    <PopupShell visible={!!scanPick} title="📷 לאיזו תיקייה לשמור?" onClose={() => setScanPick(null)} yellow={false}>
-      {folders.map((f) => (
-        <MenuItem key={f.uri} styles={styles} label={`📂  ${f.name}`} onPress={() => scanPick && saveScan(scanPick.uri, scanPick.name, f)} />
-      ))}
-      <Text style={styles.popupHint}>לשמירה בתת-תיקייה: היכנס אליה ולחץ "סרוק לכאן".</Text>
     </PopupShell>
   );
 
@@ -1185,6 +1298,9 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
               <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
             </TouchableOpacity>
           </View>
+          <TouchableOpacity style={[styles.actionBtn, styles.galleryBtn]} onPress={imagesToPdf}>
+            <Text style={styles.actionText}>🖼️ תמונות מהגלריה ל-PDF</Text>
+          </TouchableOpacity>
           {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : qualityLine}
           <TextInput
             style={styles.input}
@@ -1255,7 +1371,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
         {selectBar}
         {ghost}
         {menuPopup}
-        {scanPopup}
+        {saver.element}
         {qualityPopup}
         {newFolderPopup}
       </View>
@@ -1313,6 +1429,9 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
                 </TouchableOpacity>
               ) : null}
             </View>
+            <TouchableOpacity style={[styles.actionBtn, styles.galleryBtn]} onPress={imagesToPdf}>
+              <Text style={styles.actionText}>🖼️ תמונות מהגלריה ל-PDF</Text>
+            </TouchableOpacity>
             {scanBusy ? <Text style={styles.popupHint}>⏳ מעבד את הקובץ…</Text> : qualityLine}
             {entries.some((e) => !e.isDir) ? (
               <Text style={styles.popupHint}>טיפ: לחיצה ארוכה על קובץ וגרירה: אל תיקייה כדי להעביר, או על קובץ אחר כדי לשנות סדר. ⋮ לתפריט.</Text>
@@ -1352,7 +1471,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote }: Props) {
       {selectBar}
       {ghost}
       {menuPopup}
-      {scanPopup}
+      {saver.element}
       {newFolderPopup}
       {moveToPopup}
       {qualityPopup}
@@ -1420,6 +1539,7 @@ const makeStyles = (c: Palette) => ({
   headerRow: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, gap: 10 },
   title: { fontSize: 22, fontWeight: '800' as const, color: c.text, flexShrink: 1 },
   actionsRow: { flexDirection: 'row' as const, gap: 8, marginTop: 10, marginBottom: 10 },
+  galleryBtn: { flex: 0, marginBottom: 8 },
   actionBtn: {
     flex: 1,
     minHeight: 46,

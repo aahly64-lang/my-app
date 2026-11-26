@@ -2,6 +2,14 @@ import { requireOptionalNativeModule } from 'expo';
 
 type SharedTextEvent = { text: string };
 
+/** A file shared into the app, already copied to the cache. */
+export interface SharedFile {
+  uri: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
 export type RingKind = 'alarm' | 'timer' | 'reminder' | 'geo';
 
 export interface RingSpec {
@@ -61,6 +69,8 @@ type GeoAlarmNative = {
   scanDocument(quality: string): Promise<{ uri: string; pages: number } | null>;
   moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
+  combinePdf(uris: string[], mimes: string[], quality: string, overwrite: string | null): Promise<string | null>;
+  getInitialSharedFiles(): Promise<SharedFile[]>;
   pickContact(): Promise<{ name: string; phone: string } | null>;
   listen(prompt: string): Promise<string | null>;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
@@ -93,6 +103,7 @@ type GeoAlarmNative = {
   openSoundSettings(): void;
   setPhoneRingtone(mediaUri: string, type: 'call' | 'notification' | 'alarm'): boolean;
   addListener(event: 'onSharedText', cb: (e: SharedTextEvent) => void): { remove(): void };
+  addListener(event: 'onSharedFiles', cb: (e: { files: SharedFile[] }) => void): { remove(): void };
 };
 
 const native = requireOptionalNativeModule<GeoAlarmNative>('GeoAlarm');
@@ -190,6 +201,26 @@ export const GeoAlarm = {
       return false;
     }
   },
+  /**
+   * One PDF from PDFs and images, in order. With overwrite: written over that document (returns it);
+   * otherwise a new file in the cache (returns its uri). Null on failure.
+   */
+  combinePdf: async (uris: string[], mimes: string[], quality: string, overwrite: string | null = null): Promise<string | null> => {
+    try {
+      return native ? await native.combinePdf(uris, mimes, quality, overwrite) : null;
+    } catch {
+      return null;
+    }
+  },
+  getInitialSharedFiles: async (): Promise<SharedFile[]> => {
+    try {
+      return native ? await native.getInitialSharedFiles() : [];
+    } catch {
+      return [];
+    }
+  },
+  addSharedFilesListener: (cb: (files: SharedFile[]) => void) =>
+    safe(() => native!.addListener('onSharedFiles', (e) => cb(e.files ?? [])), { remove() {} }),
   getSoundTitle: (uri: string | null) => safe(() => native!.getSoundTitle(uri), 'ברירת מחדל'),
   pickSound: async (current: string | null, title: string) => {
     try {

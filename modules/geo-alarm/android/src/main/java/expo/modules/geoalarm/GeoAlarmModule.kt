@@ -38,8 +38,52 @@ class GeoAlarmModule : Module() {
     }
   }
 
+  private var consumedFilesIntentHash: Int? = null
+
+  /** Files shared into the app ("Share" -> our app) from WhatsApp, mail, gallery... */
+  @Suppress("DEPRECATION")
+  private fun sharedStreams(intent: Intent?): List<Uri> {
+    if (intent == null) return emptyList()
+    val out = ArrayList<Uri>()
+    try {
+      when (intent.action) {
+        Intent.ACTION_SEND -> (intent.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? Uri)?.let { out.add(it) }
+        Intent.ACTION_SEND_MULTIPLE ->
+          intent.getParcelableArrayListExtra<android.os.Parcelable>(Intent.EXTRA_STREAM)?.forEach { (it as? Uri)?.let { u -> out.add(u) } }
+        else -> return emptyList()
+      }
+      if (out.isEmpty()) intent.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { out.add(it) } }
+    } catch (e: Exception) {
+    }
+    return out.distinct()
+  }
+
+  /** Copies the shared files into the cache right away (the permission to read them is only temporary). */
+  private fun copySharedFiles(intent: Intent): List<Map<String, Any?>> {
+    val dir = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
+    val old = System.currentTimeMillis() - 24 * 3600_000L
+    dir.listFiles()?.forEach { if (it.lastModified() < old) it.delete() }
+    val out = ArrayList<Map<String, Any?>>()
+    for ((i, uri) in sharedStreams(intent).withIndex()) {
+      try {
+        var name: String? = null
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+          if (c.moveToFirst()) name = c.getString(0)
+        }
+        val mime = context.contentResolver.getType(uri) ?: intent.type?.takeIf { !it.contains("*") } ?: "application/octet-stream"
+        val clean = (name ?: uri.lastPathSegment ?: "קובץ").substringAfterLast('/').replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "קובץ" }
+        val file = java.io.File(dir, "${System.currentTimeMillis()}-$i-$clean")
+        context.contentResolver.openInputStream(uri)?.use { input -> java.io.FileOutputStream(file).use { input.copyTo(it) } } ?: continue
+        out.add(mapOf("uri" to Uri.fromFile(file).toString(), "name" to clean, "mime" to mime, "size" to file.length().toDouble()))
+      } catch (e: Exception) {
+      }
+    }
+    return out
+  }
+
   private fun extractSharedText(intent: Intent?): String? {
     if (intent == null || intent.action != Intent.ACTION_SEND) return null
+    if (sharedStreams(intent).isNotEmpty()) return null // a file (WhatsApp may add a caption as text)
     val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return null
     return text
   }
@@ -60,7 +104,7 @@ class GeoAlarmModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("GeoAlarm")
 
-    Events("onSharedText")
+    Events("onSharedText", "onSharedFiles")
 
     Function("triggerAlarm") { title: String, body: String, kind: String, sound: String?, durationMs: Double ->
       AlarmNotifier.showSimple(context, title, body, kind, sound, durationMs.toLong())
@@ -280,6 +324,21 @@ class GeoAlarmModule : Module() {
       DocumentsHelper.move(context, src, srcParent, destFolder)
     }
 
+    AsyncFunction("combinePdf") { uris: List<String>, mimes: List<String>, quality: String, overwrite: String? ->
+      ScanEnhancer.combine(context, uris, mimes, quality, overwrite)
+    }
+
+    AsyncFunction("getInitialSharedFiles") {
+      val intent = appContext.currentActivity?.intent
+      val hash = intent?.let { System.identityHashCode(it) }
+      if (intent == null || hash == consumedFilesIntentHash || sharedStreams(intent).isEmpty()) {
+        emptyList<Map<String, Any?>>()
+      } else {
+        consumedFilesIntentHash = hash
+        copySharedFiles(intent)
+      }
+    }
+
     AsyncFunction("rotatePdf") { uri: String, degrees: Int ->
       ScanEnhancer.rotatePdf(context, uri, degrees)
     }
@@ -460,6 +519,14 @@ class GeoAlarmModule : Module() {
     }
 
     OnNewIntent { intent ->
+      if (sharedStreams(intent).isNotEmpty()) {
+        consumedFilesIntentHash = System.identityHashCode(intent)
+        Thread {
+          val files = copySharedFiles(intent)
+          if (files.isNotEmpty()) sendEvent("onSharedFiles", mapOf("files" to files))
+        }.start()
+        return@OnNewIntent
+      }
       val text = extractSharedText(intent)
       if (text != null) {
         consumedIntentHash = System.identityHashCode(intent)
