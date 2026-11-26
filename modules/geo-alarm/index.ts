@@ -62,6 +62,7 @@ type GeoAlarmNative = {
   moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
   pickContact(): Promise<{ name: string; phone: string } | null>;
+  listen(prompt: string): Promise<string | null>;
   pickSound(current: string | null, title: string): Promise<{ uri: string; title: string } | null>;
   stopAlarm(): void;
   canUseFullScreenIntent(): boolean;
@@ -165,6 +166,14 @@ export const GeoAlarm = {
       return native ? await native.moveDocument(src, srcParent, destFolder) : { status: 'failed', error: 'לא זמין' };
     } catch (e: any) {
       return { status: 'failed', error: String(e?.message ?? e) };
+    }
+  },
+  /** Speech to text (Hebrew): text, "" if cancelled, null if speech input isn't available. */
+  listen: async (prompt: string): Promise<string | null> => {
+    try {
+      return native ? await native.listen(prompt) : null;
+    } catch {
+      return null;
     }
   },
   pickContact: async (): Promise<{ name: string; phone: string } | null> => {

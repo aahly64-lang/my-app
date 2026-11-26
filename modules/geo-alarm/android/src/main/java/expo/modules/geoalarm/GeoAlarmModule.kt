@@ -25,6 +25,8 @@ class GeoAlarmModule : Module() {
   private var scanQuality = "normal"
   private var pendingContactPromise: Promise? = null
   private val contactRequestCode = 4722
+  private var pendingSpeechPromise: Promise? = null
+  private val speechRequestCode = 4723
   private val soundRequestCode = 46077
 
   private fun soundTitle(uri: String?): String {
@@ -247,6 +249,33 @@ class GeoAlarmModule : Module() {
       }
     }
 
+    /**
+     * Google's speech-to-text dialog (Hebrew). Resolves with the recognized text, "" when
+     * cancelled, or null when no speech recognizer is installed.
+     */
+    AsyncFunction("listen") { prompt: String, promise: Promise ->
+      val activity = appContext.currentActivity
+      if (activity == null) {
+        promise.resolve(null)
+        return@AsyncFunction
+      }
+      pendingSpeechPromise?.resolve("")
+      pendingSpeechPromise = promise
+      try {
+        val intent = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+          putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+          putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "he-IL")
+          putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "he-IL")
+          putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, prompt)
+          putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        activity.startActivityForResult(intent, speechRequestCode)
+      } catch (e: Exception) {
+        pendingSpeechPromise = null
+        promise.resolve(null)
+      }
+    }
+
     AsyncFunction("moveDocument") { src: String, srcParent: String, destFolder: String ->
       DocumentsHelper.move(context, src, srcParent, destFolder)
     }
@@ -293,6 +322,15 @@ class GeoAlarmModule : Module() {
     }
 
     OnActivityResult { _, payload ->
+      if (payload.requestCode == speechRequestCode) {
+        val promise = pendingSpeechPromise ?: return@OnActivityResult
+        pendingSpeechPromise = null
+        val text = if (payload.resultCode == android.app.Activity.RESULT_OK)
+          payload.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: ""
+        else ""
+        promise.resolve(text)
+        return@OnActivityResult
+      }
       if (payload.requestCode == contactRequestCode) {
         val promise = pendingContactPromise ?: return@OnActivityResult
         pendingContactPromise = null

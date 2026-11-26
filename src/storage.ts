@@ -265,6 +265,8 @@ export interface Task {
   reminderTime?: string; // HH:MM
   reminderMode?: 'ring' | 'silent';
   repeatDays?: number[]; // recurring task: next due date after completion
+  repeatMonthDay?: number; // recurring: this day of every month (1–31)
+  repeatEvery?: number; // recurring: every N days
   areaId?: string; // remind when entering this location area
   subtasks?: SubTask[];
   docs?: DocLink[]; // attached documents

@@ -3,7 +3,8 @@ import { Alert, Image, Linking, Modal, ScrollView, Share, Switch, Text, TextInpu
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { GeoAlarm } from '../modules/geo-alarm';
-import { parseQuickTask } from './taskParse';
+import { normalizeSpokenTime, parseQuickTask } from './taskParse';
+import { hasRepeat, nextRepeatDue, noRepeat, repeatSummary } from './repeat';
 import { scheduleMorning } from './morning';
 import DraggableFlatList, { RenderItemParams } from 'react-native-draggable-flatlist';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -11,7 +12,7 @@ import { Feather } from '@expo/vector-icons';
 import { useAppStyles } from './appStyles';
 import { useTheme } from './theme';
 import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './ui';
-import { DAY_LETTERS, daysSummary, displayYMD, hhmm, parseHHMM, parseYMD, pickDate, pickTimeWheels } from './pickers';
+import { DAY_LETTERS, displayYMD, hhmm, parseHHMM, parseYMD, pickDate, pickTimeWheels } from './pickers';
 import { cancelRing, scheduleReminder, taskRingId } from './rings';
 import { syncGeofences } from './geoTask';
 import { DocChips } from './docLinks';
@@ -50,16 +51,6 @@ function addDays(ymd: string, n: number): string {
   return localDateString(d);
 }
 
-/** Next date (after `from`) that falls on one of the given week days. */
-function nextRepeatDate(days: number[], from: string): string {
-  for (let i = 1; i <= 7; i++) {
-    const cand = addDays(from, i);
-    const d = parseYMD(cand);
-    if (d && days.includes(d.getDay())) return cand;
-  }
-  return addDays(from, 7);
-}
-
 type SectionKey = 'overdue' | 'today' | 'tomorrow' | 'week' | 'later' | 'nodate';
 const SECTION_TITLES: Record<SectionKey, string> = {
   overdue: '🔴 באיחור',
@@ -91,6 +82,8 @@ interface Props {
   dataVersion: number;
   onCountChange: (n: number) => void;
   onConvertToNote: (t: Task) => void;
+  openTaskId?: string | null; // from the global search: open this task's editor
+  onOpenedTask?: () => void;
 }
 
 async function scheduleTaskReminder(t: Task) {
@@ -109,7 +102,7 @@ async function scheduleTaskReminder(t: Task) {
   });
 }
 
-export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }: Props) {
+export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, openTaskId, onOpenedTask }: Props) {
   const styles = useAppStyles();
   const c = useTheme();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -190,12 +183,31 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
 
   // ---------- actions ----------
   const parsed = useMemo(() => (smartOff || !quick.trim() ? null : parseQuickTask(quick)), [quick, smartOff]);
-  const smartFound = !!parsed && (!!parsed.due || !!parsed.time);
+  const smartFound = !!parsed && (!!parsed.due || !!parsed.time || !!parsed.repeat);
+
+  // 🎤 voice: the spoken text goes into the add field (with the smart preview), then "הוסף".
+  const dictate = async () => {
+    const said = await GeoAlarm.listen('אמור את המשימה, למשל "להתקשר לספק מחר בעשר"');
+    if (said === null) {
+      Alert.alert('הקלטה קולית', 'זיהוי דיבור לא זמין בטלפון. אפשר להתקין את אפליקציית Google או להשתמש במיקרופון שבמקלדת.');
+      return;
+    }
+    if (!said.trim()) return;
+    setSmartOff(false);
+    setQuick((q) => (q.trim() ? q.trim() + ' ' : '') + normalizeSpokenTime(said.trim()));
+  };
 
   const addQuick = async () => {
     if (!quick.trim()) return;
-    const p = smartFound && parsed ? parsed : { title: quick.trim(), due: undefined, time: undefined };
+    const p = smartFound && parsed ? parsed : { title: quick.trim(), due: undefined, time: undefined, repeat: undefined };
     const minOrder = tasks.reduce((m, t) => Math.min(m, t.order), 0);
+    const rep = {
+      repeatDays: p.repeat?.days,
+      repeatMonthDay: p.repeat?.monthDay,
+      repeatEvery: p.repeat?.every,
+    };
+    // A recurring task starts on its first occurrence (today included).
+    const due = quickDue ?? (hasRepeat(rep) ? nextRepeatDue(rep, p.due ?? today, true) : p.due);
     const t: Task = {
       id: newId(),
       title: p.title,
@@ -203,7 +215,8 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
       createdAt: Date.now(),
       order: minOrder - 1,
       star: quickStar,
-      due: quickDue ?? p.due,
+      due,
+      ...rep,
       reminder: !!p.time,
       reminderTime: p.time,
       subtasks: [],
@@ -315,8 +328,8 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
       await scheduleTaskReminder({ ...t, done: false });
       return;
     }
-    if (t.repeatDays?.length) {
-      const nextDue = nextRepeatDate(t.repeatDays, t.due && t.due > today ? t.due : today);
+    if (hasRepeat(t)) {
+      const nextDue = nextRepeatDue(t, t.due && t.due > today ? t.due : today);
       const updated: Task = {
         ...t,
         due: nextDue,
@@ -380,6 +393,15 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
     });
     setNewSub('');
   };
+  // opened from the global search
+  useEffect(() => {
+    if (!openTaskId) return;
+    const t = tasks.find((x) => x.id === openTaskId);
+    if (!t) return;
+    openEdit(t);
+    onOpenedTask?.();
+  }, [openTaskId, tasks]);
+
 
   const saveEdit = async () => {
     if (!edit) return;
@@ -393,6 +415,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
       reminderMode: reminder.mode,
       due: reminder.enabled ? reminder.date : edit.due,
     };
+    if (hasRepeat(updated) && !updated.due) updated.due = nextRepeatDue(updated, today, true);
     const before = tasks.find((t) => t.id === updated.id);
     persist(tasks.map((t) => (t.id === updated.id ? updated : t)));
     await scheduleTaskReminder(updated);
@@ -539,7 +562,7 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
               {[
                 t.due && !t.done ? `📅 ${displayYMD(t.due)}` : '',
                 t.reminder && !t.done ? `${t.reminderMode === 'silent' ? '🔕' : '🔔'} ${t.reminderTime}` : '',
-                t.repeatDays?.length ? `🔁 ${daysSummary(t.repeatDays)}` : '',
+                hasRepeat(t) ? `🔁 ${repeatSummary(t)}` : '',
                 area ? `📍 ${area.label}` : '',
                 subs.length ? `☑ ${subsDone}/${subs.length}` : '',
                 t.docs?.length ? `📎 ${t.docs.length}` : '',
@@ -644,6 +667,9 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
                   returnKeyType="done"
                   blurOnSubmit={false}
                 />
+                <TouchableOpacity style={styles.iconBtn} onPress={dictate} hitSlop={6}>
+                  <Feather name="mic" size={20} color={c.text} />
+                </TouchableOpacity>
                 <TouchableOpacity style={styles.darkBtn} onPress={addQuick}>
                   <Text style={styles.whiteBtnText}>הוסף</Text>
                 </TouchableOpacity>
@@ -652,7 +678,11 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
                 <View style={[styles.row, { marginBottom: 6 }]}>
                   <Text style={[styles.itemSub, styles.flex1]}>
                     ✨ זוהה: {parsed.due ? `📅 ${parsed.due === today ? 'היום' : displayYMD(parsed.due)}` : ''}
-                    {parsed.time ? `  🔔 ${parsed.time}` : ''} · "{parsed.title}"
+                    {parsed.time ? `  🔔 ${parsed.time}` : ''}
+                    {parsed.repeat
+                      ? `  🔁 ${repeatSummary({ repeatDays: parsed.repeat.days, repeatMonthDay: parsed.repeat.monthDay, repeatEvery: parsed.repeat.every })}`
+                      : ''}{' '}
+                    · "{parsed.title}"
                   </Text>
                   <TouchableOpacity onPress={() => setSmartOff(true)} hitSlop={8}>
                     <Text style={styles.linkText}>✕ בלי זיהוי</Text>
@@ -789,29 +819,57 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
             />
 
             <Text style={styles.label}>🔁 משימה חוזרת (לא חובה)</Text>
-            <View style={styles.daysRow}>
-              {DAY_LETTERS.map((letter, d) => {
-                const on = (edit.repeatDays ?? []).includes(d);
-                return (
-                  <TouchableOpacity
-                    key={d}
-                    style={[styles.dayChip, on && styles.dayChipOn]}
-                    onPress={() =>
-                      setEdit({
-                        ...edit,
-                        repeatDays: on
-                          ? (edit.repeatDays ?? []).filter((x) => x !== d)
-                          : [...(edit.repeatDays ?? []), d].sort(),
-                      })
-                    }
-                  >
-                    <Text style={[styles.dayChipText, on && styles.dayChipTextOn]}>{letter}</Text>
-                  </TouchableOpacity>
-                );
-              })}
+            <View style={styles.chipsWrapRow}>
+              {chip('לא חוזרת', !hasRepeat(edit), () => setEdit({ ...edit, ...noRepeat }))}
+              {chip('ימים בשבוע', !!edit.repeatDays?.length, () =>
+                setEdit({ ...edit, ...noRepeat, repeatDays: [(parseYMD(edit.due ?? today) ?? new Date()).getDay()] })
+              )}
+              {chip('כל חודש', !!edit.repeatMonthDay, () =>
+                setEdit({ ...edit, ...noRepeat, repeatMonthDay: (parseYMD(edit.due ?? today) ?? new Date()).getDate() })
+              )}
+              {chip('כל X ימים', !!edit.repeatEvery, () => setEdit({ ...edit, ...noRepeat, repeatEvery: 2 }))}
             </View>
             {edit.repeatDays?.length ? (
-              <Text style={styles.hintText}>אחרי סימון ✓ המשימה תחזור לבד ביום הבא שבחרת.</Text>
+              <View style={styles.daysRow}>
+                {DAY_LETTERS.map((letter, d) => {
+                  const on = (edit.repeatDays ?? []).includes(d);
+                  return (
+                    <TouchableOpacity
+                      key={d}
+                      style={[styles.dayChip, on && styles.dayChipOn]}
+                      onPress={() =>
+                        setEdit({
+                          ...edit,
+                          repeatDays: on
+                            ? (edit.repeatDays ?? []).filter((x) => x !== d)
+                            : [...(edit.repeatDays ?? []), d].sort(),
+                        })
+                      }
+                    >
+                      <Text style={[styles.dayChipText, on && styles.dayChipTextOn]}>{letter}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null}
+            {edit.repeatMonthDay ? (
+              <Stepper
+                label={`ב-${edit.repeatMonthDay} בכל חודש`}
+                onMinus={() => setEdit({ ...edit, repeatMonthDay: edit.repeatMonthDay! <= 1 ? 31 : edit.repeatMonthDay! - 1 })}
+                onPlus={() => setEdit({ ...edit, repeatMonthDay: edit.repeatMonthDay! >= 31 ? 1 : edit.repeatMonthDay! + 1 })}
+              />
+            ) : null}
+            {edit.repeatEvery ? (
+              <Stepper
+                label={repeatSummary({ repeatEvery: edit.repeatEvery })}
+                onMinus={() => setEdit({ ...edit, repeatEvery: Math.max(1, edit.repeatEvery! - 1) })}
+                onPlus={() => setEdit({ ...edit, repeatEvery: Math.min(365, edit.repeatEvery! + 1) })}
+              />
+            ) : null}
+            {hasRepeat(edit) ? (
+              <Text style={styles.hintText}>
+                אחרי סימון ✓ המשימה תחזור לבד בתאריך הבא. אפשר גם לכתוב בשורת ההוספה, למשל "לשלם ארנונה כל חודש ב-10".
+              </Text>
             ) : null}
 
             <Text style={styles.label}>📍 הזכר לי כשאני מגיע ל... (לא חובה)</Text>
@@ -1135,6 +1193,21 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote }
           {photo ? <Image source={{ uri: photo }} style={{ width: '100%', height: '85%' }} resizeMode="contain" /> : null}
         </TouchableOpacity>
       </Modal>
+    </View>
+  );
+}
+
+function Stepper({ label, onMinus, onPlus }: { label: string; onMinus: () => void; onPlus: () => void }) {
+  const styles = useAppStyles();
+  return (
+    <View style={[styles.row, { justifyContent: 'center', marginVertical: 8 }]}>
+      <TouchableOpacity style={[styles.dayChip, { width: 44 }]} onPress={onPlus} hitSlop={6}>
+        <Text style={styles.dayChipText}>+</Text>
+      </TouchableOpacity>
+      <Text style={[styles.label, { marginHorizontal: 14, marginTop: 0, marginBottom: 0 }]}>{label}</Text>
+      <TouchableOpacity style={[styles.dayChip, { width: 44 }]} onPress={onMinus} hitSlop={6}>
+        <Text style={styles.dayChipText}>−</Text>
+      </TouchableOpacity>
     </View>
   );
 }

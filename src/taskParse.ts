@@ -17,7 +17,11 @@ export interface Parsed {
   title: string;
   due?: string;
   time?: string; // HH:MM
+  repeat?: { days?: number[]; monthDay?: number; every?: number };
 }
+
+const DAY_WORDS = 'ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת';
+const dayIndex = (w: string) => DAY_NAMES.find(([re]) => re.test(w))?.[1];
 
 export function parseQuickTask(text: string, now = new Date()): Parsed {
   let t = ` ${text} `;
@@ -29,6 +33,40 @@ export function parseQuickTask(text: string, now = new Date()): Parsed {
     if (m) t = t.replace(m[0], ' ');
     return m;
   };
+
+  // repeat (before the time, so "כל חודש ב-10" is not read as 10:00)
+  let repeat: Parsed['repeat'];
+  let r: RegExpExecArray | null;
+  if ((r = take(new RegExp(`\\s(?:ב)?כל\\s+(?:יום\\s+)?((?:${DAY_WORDS})(?:\\s*(?:,|ו-?)\\s*(?:יום\\s+)?(?:${DAY_WORDS}))*)(?=\\s)`)))) {
+    const days = Array.from(new Set((r[1].match(new RegExp(DAY_WORDS, 'g')) ?? []).map(dayIndex))).filter(
+      (d): d is number => d !== undefined
+    );
+    if (days.length) repeat = { days: days.sort() };
+  } else if (
+    (r =
+      take(/\s(?:ב)?כל\s+חודש\s+(?:ב-?\s?)?(\d{1,2})(?:\s*(?:ל|ב)חודש)?(?=\s)/) ||
+      take(/\s(?:ב-?)?(\d{1,2})\s+(?:לכל|בכל)\s+חודש(?=\s)/) ||
+      take(/\s(?:ב)?כל\s+(\d{1,2})\s+(?:ל|ב)חודש(?=\s)/))
+  ) {
+    const day = Number(r[1]);
+    if (day >= 1 && day <= 31) repeat = { monthDay: day };
+  } else if (take(/\s(?:ב)?כל\s+חודש(?=\s)/)) {
+    repeat = { monthDay: now.getDate() };
+  } else if (take(/\s(?:ב)?כל\s+יום(?=\s)/)) {
+    repeat = { every: 1 };
+  } else if (take(/\s(?:ב)?כל\s+יומיים(?=\s)/)) {
+    repeat = { every: 2 };
+  } else if (take(/\s(?:ב)?כל\s+שבועיים(?=\s)/)) {
+    repeat = { every: 14 };
+  } else if (take(/\s(?:ב)?כל\s+שבוע(?=\s)/)) {
+    repeat = { every: 7 };
+  } else if ((r = take(/\s(?:ב)?כל\s+(\d{1,3})\s+(?:ימים|יום)(?=\s)/))) {
+    const n = Number(r[1]);
+    if (n >= 1) repeat = { every: n };
+  } else if ((r = take(/\s(?:ב)?כל\s+(\d{1,2})\s+שבועות(?=\s)/))) {
+    const n = Number(r[1]);
+    if (n >= 1) repeat = { every: n * 7 };
+  }
 
   // time: "בשעה 10:30", "ב-10", "ב10", "10:30", "ב 9 בערב"
   let m =
@@ -78,6 +116,52 @@ export function parseQuickTask(text: string, now = new Date()): Parsed {
     due = ymd(at.getTime() <= now.getTime() ? new Date(base.getTime() + 864e5) : base);
   }
 
+  // a recurring task starts on its first occurrence (on/after the date found, or today)
+  if (repeat?.days?.length || repeat?.monthDay) {
+    const from = due ? new Date(Number(due.slice(0, 4)), Number(due.slice(5, 7)) - 1, Number(due.slice(8, 10))) : base;
+    for (let i = 0; i < 62; i++) {
+      const d = new Date(from.getFullYear(), from.getMonth(), from.getDate() + i);
+      const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const hit = repeat.days?.length
+        ? repeat.days.includes(d.getDay())
+        : d.getDate() === Math.min(repeat.monthDay!, last);
+      if (hit) {
+        due = ymd(d);
+        break;
+      }
+    }
+  }
+
   const title = t.replace(/\s+/g, ' ').trim();
-  return { title: title || text.trim(), due, time };
+  return { title: title || text.trim(), due, time, repeat };
+}
+
+/**
+ * Speech recognition sometimes writes hours as words ("מחר בעשר וחצי").
+ * Turns "ב<hour word>[ וחצי| ורבע]" into "ב-10:30" so the parser above understands it.
+ */
+const HOUR_WORDS: [string, number][] = [
+  ['אחת עשרה', 11],
+  ['שתים עשרה', 12],
+  ['שתיים עשרה', 12],
+  ['אחת', 1],
+  ['שתיים', 2],
+  ['שלוש', 3],
+  ['ארבע', 4],
+  ['חמש', 5],
+  ['שש', 6],
+  ['שבע', 7],
+  ['שמונה', 8],
+  ['תשע', 9],
+  ['עשר', 10],
+];
+export function normalizeSpokenTime(text: string): string {
+  let out = ` ${text} `;
+  for (const [w, h] of HOUR_WORDS) {
+    out = out.replace(new RegExp(`\\s(?:בשעה\\s+|ב)${w}(\\s+(?:וחצי|ורבע))?(?=\\s)`, 'g'), (_m, part?: string) => {
+      const min = part?.includes('חצי') ? '30' : part?.includes('רבע') ? '15' : '00';
+      return ` ב-${h}:${min}`;
+    });
+  }
+  return out.replace(/\s+/g, ' ').trim();
 }

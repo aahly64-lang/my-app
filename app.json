@@ -2,7 +2,7 @@
   "expo": {
     "name": "יומן ושולחן עבודה",
     "slug": "my-personal-board-apk",
-    "version": "1.11.2",
+    "version": "1.12.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -16,7 +16,7 @@
     },
     "android": {
       "package": "com.avi.personalboard",
-      "versionCode": 27,
+      "versionCode": 28,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F172A"

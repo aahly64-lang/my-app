@@ -267,3 +267,9 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - בהגדרות לא היה אפשר לגלול עד הסוף (הגיבוי הידני הוסתר). כנראה המסך המלא (Modal) יוצא גבוה מהשטח הנראה באנדרואיד (שורת סטטוס/ניווט מעליו).
 - useScreenFrame ב-ui.tsx: maxHeight = גובה החלון לשורש, ו-paddingBottom 140 לתוכן הנגלל. הוחל על הגדרות, רינגטונים, יומני סטופר, מפת יומן, בוחר מפה, פתק מלא.
 - Google Cloud: Drive API מופעל, מסך הסכמה "יומן ושולחן עבודה" (External, Testing, משתמש בדיקה aahly64@gmail.com), OAuth client Android "Personal Board Android". מעבר ל-Production דורש דף בית ומדיניות פרטיות.
+
+## גרסה 1.12.0 (26/11/2026) – שלב 2: משימות חוזרות, קול, חיפוש כללי
+- repeat.ts: חוץ מ-repeatDays (ימים בשבוע) גם repeatMonthDay (יום בחודש, מוגבל לסוף חודש קצר) ו-repeatEvery (כל N ימים). nextRepeatDue / repeatSummary / hasRepeat. בעריכת משימה: לא חוזרת / ימים בשבוע / כל חודש / כל X ימים עם + −.
+- taskParse: "כל יום שלישי", "כל יום שני וחמישי", "כל חודש ב-10", "ב-10 לכל חודש", "כל 15 לחודש", "כל יום", "כל יומיים/שבוע/שבועיים", "כל 3 ימים", "כל 2 שבועות". נקרא לפני השעה (כדי ש"ב-10" לא ייקרא כשעה). תאריך ראשון = המופע הראשון (כולל היום).
+- 🎤 בשורת ההוספה: GeoAlarm.listen (RecognizerIntent, he-IL, קוד 4723). normalizeSpokenTime הופך "בעשר וחצי" ל-"ב-10:30". הטקסט נכנס לשדה עם התצוגה המקדימה ✨, ואז "הוסף".
+- SearchScreen: 🔍 ליד ⚙️. משימות (כותרת, הערות, שלבים, איש קשר), פתקים (נעולים – רק כותרת), מסמכים (searchDocuments בשמות), שעונים, אזורים. לחיצה: משימה – פותחת עריכה (openTaskId ל-TasksTab), פתק – openNote, מסמך – openDoc (כולל נעילה), שעון – עריכת שעון.

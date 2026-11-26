@@ -27,6 +27,8 @@ import { DocChips } from './src/docLinks';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
+import SearchScreen from './src/SearchScreen';
+import { openDoc } from './src/docLinks';
 import DocsTab from './src/DocsTab';
 import { syncGeofences, MIN_RADIUS_M, quietSetup } from './src/geoTask';
 import {
@@ -333,6 +335,8 @@ function AppInner({
   const styles = useAppStyles();
   const c = useTheme();
   const [activeTab, setActiveTab] = useState<MainTab>('tasks');
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
   const [tasksBadge, setTasksBadge] = useState(0);
   const [shared, setShared] = useState<SharedLink | null>(null);
@@ -1061,16 +1065,54 @@ function AppInner({
           <Text style={styles.appEyebrow}>{todayLabel()}</Text>
           <Text style={styles.appTitle}>יומן ושולחן עבודה</Text>
         </View>
-        <TouchableOpacity
-          onPress={() => setSetupVisible(true)}
-          hitSlop={10}
-          style={styles.gearBtn}
-          accessibilityLabel="הגדרות"
-        >
-          <Feather name="settings" size={20} color={c.text} />
-          {!permissionsOk ? <View style={styles.gearDot} /> : null}
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => setSearchVisible(true)}
+            hitSlop={10}
+            style={styles.gearBtn}
+            accessibilityLabel="חיפוש"
+          >
+            <Feather name="search" size={20} color={c.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setSetupVisible(true)}
+            hitSlop={10}
+            style={styles.gearBtn}
+            accessibilityLabel="הגדרות"
+          >
+            <Feather name="settings" size={20} color={c.text} />
+            {!permissionsOk ? <View style={styles.gearDot} /> : null}
+          </TouchableOpacity>
+        </View>
       </View>
+      <SearchScreen
+        visible={searchVisible}
+        notes={notes}
+        onClose={() => setSearchVisible(false)}
+        targets={{
+          onTask: (t) => {
+            setSearchVisible(false);
+            setActiveTab('tasks');
+            setOpenTaskId(t.id);
+          },
+          onNote: (n) => {
+            setSearchVisible(false);
+            setActiveTab('notes');
+            openNote(n);
+          },
+          onDoc: (d) => openDoc({ uri: d.uri, name: d.name, mime: d.mime }),
+          onAlarm: (a) => {
+            setSearchVisible(false);
+            setActiveTab('alarms');
+            setAlarmForm(a);
+            setAlarmFormIsNew(false);
+          },
+          onArea: () => {
+            setSearchVisible(false);
+            setActiveTab('alarms');
+          },
+        }}
+      />
 
       <View style={styles.tabBar}>
         {TABS.map(([key, icon, label]) => (
@@ -1093,7 +1135,13 @@ function AppInner({
       </View>
 
       {activeTab === 'tasks' ? (
-        <TasksTab dataVersion={dataVersion} onCountChange={setTasksBadge} onConvertToNote={taskToNote} />
+        <TasksTab
+          dataVersion={dataVersion}
+          onCountChange={setTasksBadge}
+          onConvertToNote={taskToNote}
+          openTaskId={openTaskId}
+          onOpenedTask={() => setOpenTaskId(null)}
+        />
       ) : null}
       {activeTab === 'workouts' ? (
         <WorkoutsTab dataVersion={dataVersion} shared={shared} onSharedUsed={onSharedUsed} />
