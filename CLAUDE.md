@@ -1,0 +1,72 @@
+# יומן ושולחן עבודה – הוראות עבודה ל-Claude
+
+האפליקציה של אבי (Avi). אפליקציית Android אישית בעברית: משימות, פתקים, שעונים מעוררים (גם לפי מיקום), סטופר/טיימר, כושר (סרטונים), מסמכים וסריקה, גיבוי.
+היסטוריה מלאה של כל גרסה ומה השתנה בה: **PROJECT.md** (מעדכנים אותו בכל גרסה).
+
+## כללי עבודה עם אבי – חובה
+1. **לא בונים ולא משנים כלום בלי אישור.** אבי אמר: "בבקשה אל תעשה כלום מבלי שתתייעץ איתי".
+   קודם: לאבחן, להסביר בקצרה בעברית, להציע אפשרויות (א'/ב') עם המלצה – ולחכות ל"כן תבנה" / "תתחיל" / "לך על זה".
+2. לענות **בעברית**, קצר וברור, בלי מונחים טכניים מיותרים. אבי שולח באגים כרשימה ממוספרת – לענות לפי אותם מספרים.
+3. להיות כנים: אם תיקון קודם לא עבד – להגיד את זה. לא לטעון שמשהו נבדק על טלפון אם לא נבדק.
+4. פעולות שדורשות הסכמה לתנאים (Google Cloud וכו'), תשלום או פרטי התחברות – רק אחרי אישור מפורש. סיסמאות ותשלומים אבי מזין בעצמו.
+5. בסוף כל גרסה: קישור ההתקנה, רשימה קצרה של מה השתנה, ומה כדאי לבדוק.
+
+קישור התקנה (תמיד הגרסה האחרונה):
+https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.apk
+
+## טכנולוגיה
+- Expo SDK 52, React Native 0.76.9, TypeScript. אין package-lock – ה-CI מריץ `npm install`.
+- package: `com.avi.personalboard`. גרסה ב-`app.json`: `expo.version` + `android.versionCode` (להעלות את שניהם בכל גרסה).
+- מודול native משלנו: `modules/geo-alarm` (Kotlin, expo-modules). הנתיב `modules/geo-alarm/android` מסומן ב-.gitignore אבל הקבצים **במעקב** – להוסיף עם `git add -u` (לא `git add <path>`).
+- נושא/צבעים: `ThemeContext` + `paletteFor(dark, accent)`, `useAppStyles()` ב-appStyles.ts.
+- `PopupShell` (ui.tsx) – חלונית; גובה הגלילה מחושב בפיקסלים (אחוזים לא עובדים טוב באנדרואיד). יש `footer` לכפתורים קבועים.
+- מסכים מלאים (Modal) משתמשים ב-`useScreenFrame()` (ui.tsx): maxHeight = גובה החלון + רווח תחתון 140.
+- באג ידוע ב-RN 0.76: FlatList אופקי ב-RTL קורס ("ListMetricsAggregator") – להשתמש ב-ScrollView אופקי.
+- אחסון: AsyncStorage דרך `src/storage.ts`.
+
+## קבצים מרכזיים
+- `App.tsx` – מסך ראשי, טאבים, פתקים, שעונים, גיבוי/שחזור, חיפוש.
+- `src/TasksTab.tsx` – משימות (רשימות, תבניות, תזכורות, חזרה, קול). `src/taskParse.ts` – זיהוי חכם של טקסט בעברית (תאריך, שעה, חזרה). `src/repeat.ts` – משימות חוזרות.
+- `src/NoteScreen.tsx`, `src/richNote.tsx` – פתק מלא ועורך טקסט עשיר (סרגל כלים משלנו).
+- `src/DocsTab.tsx` – מסמכים (SAF), סריקה, גרירה, נעילה. `src/docLinks.tsx` – צ'יפים של מסמכים מצורפים.
+- `src/geoTask.ts` – שעונים לפי מיקום (geofence + מעקב מדויק בשלבים לחיסכון בסוללה).
+- `src/backup.ts` (קובץ ידני + תיקייה בטלפון), `src/driveBackup.ts` (גוגל דרייב), `src/lock.ts` (טביעת אצבע).
+- `src/SearchScreen.tsx` – חיפוש בכל האפליקציה. `src/SetupScreen.tsx` – הגדרות וגיבוי.
+- `modules/geo-alarm/android/.../GeoAlarmModule.kt` – פונקציות native (מסמכים, סריקה, איש קשר, דיבור, צלצולים). `AlarmNotifier.kt` – ערוצי התראות.
+
+## בדיקה ושחרור גרסה
+1. בדיקות מקומיות (צריך node_modules – `npm install` או symlink):
+   - `npx tsc --noEmit`
+   - `npx expo export --platform android --output-dir /tmp/exp`
+2. להעלות גרסה ב-app.json (version + versionCode) ולהוסיף סעיף ל-PROJECT.md.
+3. commit + push ישיר ל-`main` (GitHub מחובר לחשבון של אבי ב-Claude):
+   `git -c push.negotiate=true push origin HEAD:main`
+4. GitHub Actions ("Build APK") בונה APK בכ-8–10 דקות ומפרסם release. לבדוק: `gh run list -L 1`.
+   commit של תיעוד בלבד: להוסיף `[skip ci]` להודעה.
+5. אם אין גישת push: אפשר להעלות דרך הדפדפן (github.com/.../upload/main/<תיקייה>) – כל תיקייה בנפרד, אחרת הקבצים נוחתים בשורש.
+
+## Google Cloud (פרויקט "My Maps Project", id: fine-iterator-515618-b2, חשבון aahly64@gmail.com)
+- חיוב: ניסיון חינם (קרדיט). התראת תקציב "Maps alert" 5₪ לחודש.
+- Maps SDK for Android מופעל. המפתח נמצא ב-app.json (`android.config.googleMaps.apiKey`), מוגבל לאפליקציה + SHA-1.
+- Google Drive API מופעל. מסך הסכמה OAuth "יומן ושולחן עבודה" – External, **מצב Testing**, משתמש בדיקה: aahly64@gmail.com.
+- OAuth client מסוג Android: "Personal Board Android" – com.avi.personalboard.
+- SHA-1 של החתימה (debug.keystore סטנדרטי שחותם את ה-release): `5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25`
+- כניסה ל-Cloud Console דרך הדפדפן המובנה באפליקציית Claude במחשב; לפעמים גוגל מבקשת מאבי להזין סיסמה מחדש.
+
+## מצב נוכחי ומה פתוח (עדכון: 26/11/2026, גרסה 1.12.0)
+ממתין לבדיקה של אבי על הטלפון:
+- 1.11.2 – הגלילה בהגדרות מגיעה עד הסוף?
+- 1.11.1 – "התחבר לגוגל דרייב" עובד? (אם DEVELOPER_ERROR – לבדוק את ה-OAuth client/SHA-1)
+- 1.12.0 – משימות חוזרות, 🎤 הוספה בקול, 🔍 חיפוש כללי.
+- 1.10.4 – צריכת הסוללה ירדה?
+- מוקדם יותר: הפניית סריקה (/Rotate), תוצאות העברת קבצים.
+
+תוכנית שאושרה עקרונית (כל שלב רק אחרי אישור):
+- שלב 3 (1.13.0): רשימת סימון ☐/☑ בתוך פתק, הצמדת פתקים, חיפוש לפי הטקסט שבתוך סריקות (OCR).
+- שלב 4 (1.14.0): כושר – יומן אימונים וגרף התקדמות.
+- להעביר את מסך ההסכמה של גוגל ל-Production: צריך דף בית + מדיניות פרטיות (הוצע: GitHub Pages במאגר). לא בוצע.
+- רעיונות חיסכון בסוללה שהוצעו ולא אושרו: שעות פעילות לשעון מיקום, מצב מדויק כברירת מחדל כבוי.
+- אבי לא רוצה ווידג'ט למסך הבית.
+
+העדפות שאבי ביקש:
+- התראות רק לתזכורות משימות, שעונים מעוררים (רגילים ומיקום) וסיכום בוקר. בלי סמל קבוע ובלי מספר על אייקון האפליקציה.
