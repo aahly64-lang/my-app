@@ -133,19 +133,22 @@ object DocsPreview {
     val root: String
   )
 
-  private fun md5(ctx: Context, uri: String): String? = try {
-    val md = MessageDigest.getInstance("MD5")
-    ctx.contentResolver.openInputStream(Uri.parse(uri))?.use { ins ->
-      val buf = ByteArray(64 * 1024)
-      while (true) {
-        val n = ins.read(buf)
-        if (n < 0) break
-        md.update(buf, 0, n)
+  private fun md5(ctx: Context, uri: String): String? {
+    return try {
+      val md = MessageDigest.getInstance("MD5")
+      val ins = ctx.contentResolver.openInputStream(Uri.parse(uri)) ?: return null
+      ins.use {
+        val buf = ByteArray(64 * 1024)
+        while (true) {
+          val n = it.read(buf)
+          if (n < 0) break
+          md.update(buf, 0, n)
+        }
       }
-    } ?: return null
-    md.digest().joinToString("") { "%02x".format(it) }
-  } catch (e: Exception) {
-    null
+      md.digest().joinToString("") { b -> "%02x".format(b) }
+    } catch (e: Exception) {
+      null
+    }
   }
 
   /**
