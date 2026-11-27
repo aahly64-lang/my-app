@@ -271,6 +271,26 @@ class GeoAlarmModule : Module() {
       DocumentsHelper.copyInto(context, src, treeUri, name, mime)
     }
 
+    AsyncFunction("copyToFile") { src: String, dest: String ->
+      DocsExtra.copyToFile(context, src, dest)
+    }
+
+    Function("documentParent") { uri: String ->
+      DocsExtra.parentFolder(uri)
+    }
+
+    Function("isUnmetered") {
+      DocsExtra.isUnmetered(context)
+    }
+
+    AsyncFunction("uploadToSession") { src: String, sessionUrl: String, mime: String ->
+      DocsExtra.uploadToSession(context, src, sessionUrl, mime)
+    }
+
+    AsyncFunction("protectPdf") { src: String, password: String, name: String ->
+      DocsExtra.protectPdf(context, src, password, name)
+    }
+
     AsyncFunction("createFolder") { parentUri: String, name: String ->
       DocumentsHelper.createFolder(context, parentUri, name)
     }

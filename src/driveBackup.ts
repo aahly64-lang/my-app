@@ -13,8 +13,8 @@ const FOLDER_NAME = 'גיבוי יומן ושולחן עבודה';
 const PREFIX = 'board-backup-';
 const KEEP = 7;
 const KEY = '@avi_drive_backup_v1';
-const API = 'https://www.googleapis.com/drive/v3';
-const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
+export const API = 'https://www.googleapis.com/drive/v3';
+export const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 
 export interface DriveBackupConfig {
   enabled: boolean;
@@ -22,6 +22,14 @@ export interface DriveBackupConfig {
   folderId?: string;
   lastAt?: number;
   lastError?: string;
+  /** documents' files too (default: yes) */
+  files?: boolean;
+  /** upload the files only on Wi-Fi (default: yes) */
+  wifiOnly?: boolean;
+  filesLastAt?: number;
+  filesCount?: number;
+  filesError?: string;
+  filesNote?: string;
 }
 
 let configured = false;
@@ -39,7 +47,7 @@ export async function loadDriveBackup(): Promise<DriveBackupConfig> {
     return { enabled: false };
   }
 }
-const save = (c: DriveBackupConfig) => AsyncStorage.setItem(KEY, JSON.stringify(c)).catch(() => {});
+export const saveDriveBackup = (c: DriveBackupConfig) => AsyncStorage.setItem(KEY, JSON.stringify(c)).catch(() => {});
 
 /** Interactive sign-in. Returns the new config, or throws with a Hebrew message. */
 export async function connectDrive(): Promise<DriveBackupConfig> {
@@ -57,7 +65,7 @@ export async function connectDrive(): Promise<DriveBackupConfig> {
   }
   if (!isSuccessResponse(res)) throw new Error('ההתחברות בוטלה.');
   const cfg: DriveBackupConfig = { enabled: true, email: res.data.user.email };
-  await save(cfg);
+  await saveDriveBackup(cfg);
   return cfg;
 }
 
@@ -79,17 +87,17 @@ export async function disconnectDrive() {
   } catch {
     // already signed out
   }
-  await save({ enabled: false });
+  await saveDriveBackup({ enabled: false });
 }
 
-async function token(): Promise<string> {
+export async function token(): Promise<string> {
   configure();
   if (!GoogleSignin.hasPreviousSignIn()) throw new Error('צריך להתחבר שוב לחשבון גוגל.');
   await GoogleSignin.signInSilently();
   return (await GoogleSignin.getTokens()).accessToken;
 }
 
-async function api(path: string, t: string, init: RequestInit = {}, base = API) {
+export async function api(path: string, t: string, init: RequestInit = {}, base = API) {
   const r = await fetch(base + path, {
     ...init,
     headers: { Authorization: 'Bearer ' + t, ...(init.headers ?? {}) },
@@ -107,7 +115,7 @@ async function api(path: string, t: string, init: RequestInit = {}, base = API) 
 
 const q = (s: string) => encodeURIComponent(s);
 
-async function folderId(t: string, cfg: DriveBackupConfig): Promise<string> {
+export async function folderId(t: string, cfg: DriveBackupConfig): Promise<string> {
   if (cfg.folderId) {
     try {
       const r = await api(`/files/${cfg.folderId}?fields=id,trashed`, t);
@@ -178,11 +186,11 @@ export async function runDriveBackup(payload: () => Promise<object>, force = fal
     const all = await listFiles(t, folder);
     for (const old of all.slice(KEEP)) await api(`/files/${old.id}`, t, { method: 'DELETE' }).catch(() => {});
     const next = { ...cfg, folderId: folder, lastAt: Date.now(), lastError: undefined };
-    await save(next);
+    await saveDriveBackup(next);
     return next;
   } catch (e: any) {
     const next = { ...cfg, lastError: e?.message ?? 'הגיבוי לגוגל דרייב נכשל.' };
-    await save(next);
+    await saveDriveBackup(next);
     return next;
   }
 }

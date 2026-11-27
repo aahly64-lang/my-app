@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   FlatList,
   Image,
   ScrollView,
@@ -12,6 +13,20 @@ import {
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
+import * as Sharing from 'expo-sharing';
+import {
+  TRASH_DAYS,
+  TRASH_WARN_BYTES,
+  TrashItem,
+  daysLeft,
+  deleteForever,
+  emptyTrash,
+  loadTrash,
+  moveToTrash,
+  purgeTrash,
+  restoreFromTrash,
+  trashSize,
+} from './trash';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { DocEntry, GeoAlarm, SharedFile } from '../modules/geo-alarm';
 import { Palette, cardShadow, useTheme, useThemedStyles } from './theme';
@@ -198,7 +213,13 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   const [meta, setMeta] = useState<Record<string, DocMeta>>({});
   const [recent, setRecent] = useState<RecentDoc[]>([]);
   const [menu, setMenu] = useState<DocEntry | null>(null);
-  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages'>('menu');
+  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages' | 'protect'>('menu');
+  const [password, setPassword] = useState('');
+  // recycle bin
+  const [trash, setTrash] = useState<TrashItem[]>([]);
+  const [trashOpen, setTrashOpen] = useState(false);
+  // locked documents are hidden until the user asks to see them (fingerprint)
+  const [showLocked, setShowLocked] = useState(false);
   const saver = useSaveDocs();
   const [renameText, setRenameText] = useState('');
   const [selected, setSelected] = useState<Set<string> | null>(null); // multi-select
@@ -229,8 +250,22 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     loadDocView().then(setView);
     loadScanQuality().then(setQuality);
     loadDocOrder().then(setOrder);
+    purgeTrash().then(setTrash);
     setPath([]);
   }, [dataVersion]);
+
+  // hide the locked documents again when the app goes to the background
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'background') setShowLocked(false);
+    });
+    return () => sub.remove();
+  }, []);
+
+  const hidden = (uri: string) => !showLocked && !!meta[uri]?.locked;
+  const revealLocked = async () => {
+    if (await ensureUnlocked('הצגת מסמכים נעולים')) setShowLocked(true);
+  };
 
   const current = path[path.length - 1];
 
@@ -510,6 +545,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     } else {
       if (!(await canLock())) return;
       await updateMeta(e.uri, { locked: true, name: e.name, mime: e.mime }, e);
+      if (!showLocked)
+        Alert.alert('🔒 המסמך ננעל', 'מעכשיו הוא מוסתר מהרשימות. כדי לראות אותו לחץ "הצג נעולים" (עם טביעת אצבע).');
     }
     closeMenu();
   };
@@ -696,17 +733,106 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       node
     );
 
+  const inFolder = (uri: string) => (current && entries.some((x) => x.uri === uri) ? current.uri : undefined);
+
+  /** Moves documents to the recycle bin. Returns the ones that were removed from their folder. */
+  const trashDocs = async (list: DocEntry[]) => {
+    const gone: string[] = [];
+    const noCopy: DocEntry[] = [];
+    let failed = 0;
+    for (const e of list) {
+      const r = await moveToTrash(e, inFolder(e.uri), meta[e.uri]);
+      if (r === 'ok') gone.push(e.uri);
+      else if (r === 'nocopy') noCopy.push(e);
+      else failed++;
+    }
+    await forget(gone);
+    const t = await loadTrash();
+    setTrash(t);
+    if (failed) Alert.alert('מחיקה', `${failed} קבצים לא נמחקו. ייתכן שאין הרשאת כתיבה לתיקייה.`);
+    if (noCopy.length)
+      confirm(
+        'מחיקה',
+        `לא הצלחתי לשמור עותק בסל המחזור של ${noCopy.length === 1 ? `"${noCopy[0].name}"` : `${noCopy.length} קבצים`} (אולי אין מספיק מקום). למחוק לצמיתות בלי סל?`,
+        'מחק לצמיתות',
+        async () => {
+          const ok = noCopy.filter((e) => GeoAlarm.deleteDocument(e.uri)).map((e) => e.uri);
+          await forget(ok);
+          refresh();
+          if (results) setResults(results.filter((r) => !ok.includes(r.uri)));
+        }
+      );
+    else if (gone.length && trashSize(t) > TRASH_WARN_BYTES)
+      Alert.alert('🗑️ סל המחזור מתמלא', `בסל יש ${t.length} מסמכים שתופסים ${sizeText(trashSize(t))}. כדאי לרוקן אותו (כפתור "סל מחזור" במסך המסמכים).`);
+    refresh();
+    if (results) setResults(results.filter((r) => !gone.includes(r.uri)));
+    return gone;
+  };
+
   const doDelete = (e: DocEntry) => {
-    confirm('מחיקת קובץ', `למחוק את "${e.name}" מהטלפון? אי אפשר לבטל את זה.`, 'מחק', async () => {
-      if (!GeoAlarm.deleteDocument(e.uri)) {
-        Alert.alert('מחיקה', 'לא הצלחתי למחוק. ייתכן שאין הרשאת כתיבה לתיקייה.');
-        return;
-      }
-      await forget([e.uri]);
+    confirm('מחיקת קובץ', `להעביר את "${e.name}" לסל המחזור? אפשר לשחזר אותו במשך ${TRASH_DAYS} יום.`, 'מחק', async () => {
       closeMenu();
-      refresh();
-      if (results) setResults(results.filter((r) => r.uri !== e.uri));
+      await trashDocs([e]);
     });
+  };
+
+  // ---------- recycle bin ----------
+  const restoreItem = async (t: TrashItem) => {
+    if (t.meta?.locked && !showLocked && !(await ensureUnlocked('שחזור מסמך נעול'))) return;
+    const uri = await restoreFromTrash(t, folders.map((f) => f.uri));
+    if (!uri) {
+      Alert.alert('שחזור', 'לא הצלחתי להחזיר את הקובץ לתיקייה. ייתכן שהתיקייה נותקה או נמחקה – חבר אותה שוב ונסה.');
+      return;
+    }
+    if (t.meta) {
+      const m = await updateMeta(uri, { ...t.meta, name: t.name, mime: t.mime });
+      if (m?.expiry) await scheduleExpiry(uri, m);
+      refreshMorning();
+    }
+    setTrash(await loadTrash());
+    refresh();
+    Alert.alert('שוחזר ✓', `"${t.name}" חזר לתיקייה.`);
+  };
+  const deleteItemForever = (t: TrashItem) =>
+    confirm('מחיקה לצמיתות', `למחוק את "${t.name}" לצמיתות? אי אפשר לבטל את זה.`, 'מחק לצמיתות', async () =>
+      setTrash(await deleteForever([t.id]))
+    );
+  const doEmptyTrash = () =>
+    confirm(
+      'ריקון סל המחזור',
+      `למחוק לצמיתות ${trash.length === 1 ? 'מסמך אחד' : `${trash.length} מסמכים`} (${sizeText(trashSize(trash))})? אי אפשר לבטל את זה.`,
+      'רוקן סל',
+      async () => {
+        await emptyTrash();
+        setTrash([]);
+      }
+    );
+
+  // ---------- password-protected PDF (only when the user picks it) ----------
+  const shareProtected = async (e: DocEntry) => {
+    const pw = password.trim();
+    if (pw.length < 4) {
+      Alert.alert('PDF עם סיסמה', 'הסיסמה צריכה להיות לפחות 4 תווים.');
+      return;
+    }
+    if (meta[e.uri]?.locked && !(await ensureUnlocked('שיתוף מסמך נעול'))) return;
+    const base = e.name.replace(/\.[^.]+$/, '');
+    const out = await saver.busy('⏳ מכין PDF עם סיסמה…', async () => {
+      let src: string | null = e.uri;
+      if (!e.mime.includes('pdf')) src = await GeoAlarm.combinePdf([e.uri], [e.mime], 'normal');
+      return src ? GeoAlarm.protectPdf(src, pw, base + '.pdf') : null;
+    });
+    if (!out) {
+      Alert.alert('PDF עם סיסמה', 'לא הצלחתי להכין את הקובץ.');
+      return;
+    }
+    closeMenu();
+    setPassword('');
+    try {
+      await Sharing.shareAsync(out, { mimeType: 'application/pdf', dialogTitle: 'שיתוף PDF עם סיסמה' });
+    } catch {
+      Alert.alert('PDF עם סיסמה', 'השיתוף נכשל.');
+    }
   };
 
   const setExpiry = (e: DocEntry) => {
@@ -806,13 +932,12 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
 
   const deleteSelected = () => {
     if (!selected || selected.size === 0) return;
-    confirm('מחיקת קבצים', `למחוק ${selected.size} קבצים מהטלפון? אי אפשר לבטל את זה.`, 'מחק', async () => {
-      const uris = [...selected];
-      const failed = uris.filter((u) => !GeoAlarm.deleteDocument(u));
-      await forget(uris.filter((u) => !failed.includes(u)));
+    confirm('מחיקת קבצים', `להעביר ${selected.size} קבצים לסל המחזור? אפשר לשחזר אותם במשך ${TRASH_DAYS} יום.`, 'מחק', async () => {
+      const pool = new Map<string, DocEntry>();
+      [...recentShown, ...favs, ...(results ?? []), ...entries].forEach((e) => pool.set(e.uri, e));
+      const list = [...selected].map((u) => pool.get(u)).filter((e): e is DocEntry => !!e);
       setSelected(null);
-      refresh();
-      if (failed.length) Alert.alert('מחיקה', `${failed.length} קבצים לא נמחקו.`);
+      await trashDocs(list);
     });
   };
 
@@ -825,7 +950,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   const shownEntries = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = entries.filter(
-      (e) => !e.name.startsWith('.') && (!q || e.name.toLowerCase().includes(q)) && passes(filter, e.mime, e.isDir)
+      (e) => !e.name.startsWith('.') && !hidden(e.uri) && (!q || e.name.toLowerCase().includes(q)) && passes(filter, e.mime, e.isDir)
     );
     return list.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -838,35 +963,35 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       }
       return a.name.localeCompare(b.name, 'he');
     });
-  }, [entries, search, sortBy, filter, order, current]);
+  }, [entries, search, sortBy, filter, order, current, meta, showLocked]);
 
   const shownResults = useMemo(
-    () => (results ?? []).filter((e) => passes(filter, e.mime, e.isDir)),
-    [results, filter]
+    () => (results ?? []).filter((e) => !hidden(e.uri) && passes(filter, e.mime, e.isDir)),
+    [results, filter, meta, showLocked]
   );
 
   const favs = useMemo(
     () =>
       Object.entries(meta)
-        .filter(([, m]) => m.fav && passes(filter, m.mime, false))
+        .filter(([, m]) => m.fav && (showLocked || !m.locked) && passes(filter, m.mime, false))
         .map(([uri, m]) => ({ uri, name: m.name, mime: m.mime, isDir: false, size: 0, modified: 0 } as DocEntry)),
-    [meta, filter]
+    [meta, filter, showLocked]
   );
   const expiring = useMemo(
     () =>
       Object.entries(meta)
-        .filter(([, m]) => m.expiry && daysUntil(m.expiry) <= 60)
+        .filter(([, m]) => m.expiry && (showLocked || !m.locked) && daysUntil(m.expiry) <= 60)
         .sort((a, b) => (a[1].expiry! < b[1].expiry! ? -1 : 1))
         .map(([uri, m]) => ({ uri, name: m.name, mime: m.mime, isDir: false, size: 0, modified: 0 } as DocEntry)),
-    [meta]
+    [meta, showLocked]
   );
   const recentShown = useMemo(
     () =>
       recent
-        .filter((r) => passes(filter, r.mime, false))
+        .filter((r) => !hidden(r.uri) && passes(filter, r.mime, false))
         .slice(0, 6)
         .map((r) => ({ uri: r.uri, name: r.name, mime: r.mime, isDir: false, size: 0, modified: 0 } as DocEntry)),
-    [recent, filter]
+    [recent, filter, meta, showLocked]
   );
 
   // ---------- rendering ----------
@@ -1050,6 +1175,16 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               GeoAlarm.shareDocument(menu.uri, menu.mime);
             }}
           />
+          {menu.mime.includes('pdf') || menu.mime.startsWith('image/') ? (
+            <MenuItem
+              styles={styles}
+              label="🔐  שיתוף כ-PDF עם סיסמה"
+              onPress={() => {
+                setPassword('');
+                setPanel('protect');
+              }}
+            />
+          ) : null}
           <MenuItem styles={styles} label={m?.locked ? '🔓  בטל נעילה' : '🔒  נעל (טביעת אצבע)'} onPress={() => toggleLock(menu)} />
           <MenuItem
             styles={styles}
@@ -1111,6 +1246,28 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               }}
             />
           ))}
+        </>
+      ) : null}
+
+      {menu && panel === 'protect' ? (
+        <>
+          <Text style={styles.hint}>
+            ישותף עותק של הקובץ שנפתח רק עם הסיסמה. הקובץ אצלך נשאר בלי סיסמה. את הסיסמה כדאי לשלוח בנפרד (למשל בהודעה אחרת).
+          </Text>
+          <TextInput
+            style={styles.input}
+            value={password}
+            onChangeText={setPassword}
+            placeholder="סיסמה (לפחות 4 תווים)"
+            placeholderTextColor={c.muted}
+            autoFocus
+            autoCapitalize="none"
+            autoCorrect={false}
+            onSubmitEditing={() => shareProtected(menu)}
+          />
+          <TouchableOpacity style={styles.bigBtn} onPress={() => shareProtected(menu)}>
+            <Text style={styles.bigBtnText}>🔐 שתף עם סיסמה</Text>
+          </TouchableOpacity>
         </>
       ) : null}
 
@@ -1274,6 +1431,87 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     </PopupShell>
   );
 
+  const trashBytes = trashSize(trash);
+  const trashFull = trashBytes > TRASH_WARN_BYTES;
+  const trashSummary = trash.length
+    ? `${trash.length === 1 ? 'מסמך אחד' : `${trash.length} מסמכים`}, ${sizeText(trashBytes) || '0 KB'}`
+    : 'ריק';
+  const trashRow = (
+    <TouchableOpacity style={[styles.row, trashFull && styles.trashFull]} onPress={() => setTrashOpen(true)}>
+      <Text style={styles.folderIcon}>🗑️</Text>
+      <View style={styles.flex1}>
+        <Text style={styles.rowTitle}>סל מחזור · {trashSummary}</Text>
+        <Text style={[styles.rowSub, trashFull && styles.danger]}>
+          {trashFull ? '⚠️ הסל תופס הרבה מקום – כדאי לרוקן אותו' : `מסמכים שנמחקו נשמרים כאן ${TRASH_DAYS} יום`}
+        </Text>
+      </View>
+      <Text style={styles.chev}>‹</Text>
+    </TouchableOpacity>
+  );
+
+  const lockedBar = (count: number) =>
+    showLocked ? (
+      <TouchableOpacity onPress={() => setShowLocked(false)} hitSlop={6}>
+        <Text style={styles.popupHint}>🔓 מוצגים גם המסמכים הנעולים · הסתר אותם</Text>
+      </TouchableOpacity>
+    ) : count ? (
+      <TouchableOpacity onPress={revealLocked} hitSlop={6}>
+        <Text style={styles.popupHint}>
+          🔒 {count === 1 ? 'מסמך נעול אחד מוסתר' : `${count} מסמכים נעולים מוסתרים`} · הצג (טביעת אצבע)
+        </Text>
+      </TouchableOpacity>
+    ) : null;
+
+  const trashPopup = (
+    <PopupShell
+      visible={trashOpen}
+      title={`🗑️ סל מחזור · ${trashSummary}`}
+      onClose={() => setTrashOpen(false)}
+      yellow={false}
+      footer={
+        trash.length ? (
+          <TouchableOpacity style={[styles.bigBtn, styles.dangerBtn]} onPress={doEmptyTrash}>
+            <Text style={styles.bigBtnText}>🗑️ רוקן סל</Text>
+          </TouchableOpacity>
+        ) : undefined
+      }
+    >
+      {trashFull ? (
+        <View style={styles.warnBox}>
+          <Text style={styles.warnText}>הסל עבר 100MB. כדאי לרוקן אותו כדי לפנות מקום בטלפון.</Text>
+        </View>
+      ) : null}
+      {trash.length === 0 ? (
+        <Text style={styles.empty}>הסל ריק. מסמך שתמחק יישמר כאן {TRASH_DAYS} יום, ואז יימחק לבד.</Text>
+      ) : (
+        <Text style={styles.popupHint}>מסמכים נמחקים מכאן לבד אחרי {TRASH_DAYS} יום.</Text>
+      )}
+      {trash.map((t) => {
+        const secret = !!t.meta?.locked && !showLocked;
+        const left = daysLeft(t);
+        return (
+          <View key={t.id} style={styles.trashItem}>
+            <Text style={styles.rowTitle} numberOfLines={2}>
+              {secret ? '🔒 מסמך נעול' : `${docIcon(t.mime)} ${t.name}`}
+            </Text>
+            <Text style={styles.rowSub}>
+              {sizeText(t.size)} · נמחק {new Date(t.deletedAt).toLocaleDateString('he-IL')} ·{' '}
+              {left === 0 ? 'יימחק היום' : `יימחק סופית בעוד ${left} ימים`}
+            </Text>
+            <View style={styles.trashBtns}>
+              <TouchableOpacity style={styles.trashBtn} onPress={() => restoreItem(t)}>
+                <Text style={styles.actionText}>↩️ שחזר</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.trashBtn} onPress={() => deleteItemForever(t)}>
+                <Text style={[styles.actionText, styles.danger]}>✖ מחק לצמיתות</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+      })}
+    </PopupShell>
+  );
+
   // ---------- home ----------
   if (!current) {
     const showingSearch = search.trim().length >= 2;
@@ -1310,6 +1548,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
             onChangeText={setSearch}
           />
           {filterBar}
+          {lockedBar(Object.values(meta).filter((x) => x.locked).length)}
 
           {showingSearch ? (
             <>
@@ -1365,6 +1604,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
                 </TouchableOpacity>
                 </View>
               ))}
+              <Text style={styles.section}>🗑️ סל מחזור</Text>
+              {trashRow}
             </>
           )}
         </ScrollView>
@@ -1374,6 +1615,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
         {saver.element}
         {qualityPopup}
         {newFolderPopup}
+        {trashPopup}
       </View>
     );
   }
@@ -1444,6 +1686,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               onChangeText={setSearch}
             />
             {filterBar}
+            {lockedBar(entries.filter((e) => meta[e.uri]?.locked).length)}
             <View style={styles.chipsWrap}>
               {(
                 [
@@ -1475,6 +1718,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       {newFolderPopup}
       {moveToPopup}
       {qualityPopup}
+      {trashPopup}
     </View>
   );
 }
@@ -1699,4 +1943,16 @@ const makeStyles = (c: Palette) => ({
     marginTop: 14,
   },
   bigBtnText: { color: c.onAccent, fontWeight: '800' as const, fontSize: 16 },
+  dangerBtn: { backgroundColor: c.danger, marginTop: 0 },
+  trashFull: { borderWidth: 1.5, borderColor: c.danger },
+  trashItem: { paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: c.border },
+  trashBtns: { flexDirection: 'row' as const, gap: 8, marginTop: 8 },
+  trashBtn: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 12,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: c.subtle,
+  },
 });

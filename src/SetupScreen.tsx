@@ -41,6 +41,8 @@ interface Props {
   driveBackup: DriveBackupConfig;
   onConnectDrive: () => void;
   onDriveBackupNow: () => void;
+  driveFilesProgress: { done: number; total: number } | null;
+  onDriveOption: (patch: { files?: boolean; wifiOnly?: boolean }) => void;
   onDisconnectDrive: () => void;
   onRestoreDrive: (id: string) => void;
   themeMode: ThemeMode;
@@ -144,6 +146,8 @@ export default function SetupScreen({
   driveBackup,
   onConnectDrive,
   onDriveBackupNow,
+  driveFilesProgress,
+  onDriveOption,
   onDisconnectDrive,
   onRestoreDrive,
   themeMode,
@@ -377,6 +381,29 @@ export default function SetupScreen({
                 {driveBackup.lastError
                   ? '⚠️ ' + driveBackup.lastError
                   : `✓ פעיל · ${driveBackup.email ?? ''}${stamp(driveBackup.lastAt)}`}
+              </Text>
+              <Text style={[styles.intro, driveBackup.files !== false && driveBackup.filesError ? { color: '#D70015' } : null]}>
+                {driveBackup.files === false
+                  ? '📄 קבצי המסמכים: לא מגובים'
+                  : driveFilesProgress
+                    ? `📄 קבצי המסמכים: ⏳ מעלה${driveFilesProgress.total ? ` ${driveFilesProgress.done} מתוך ${driveFilesProgress.total}` : '…'}`
+                    : driveBackup.filesError
+                      ? '📄 קבצי המסמכים: ⚠️ ' + driveBackup.filesError
+                      : driveBackup.filesLastAt
+                        ? `📄 קבצי המסמכים: ✓ ${driveBackup.filesCount ?? 0} קבצים בדרייב${stamp(driveBackup.filesLastAt)}`
+                        : '📄 קבצי המסמכים: עוד לא גובו'}
+                {driveBackup.files !== false && driveBackup.filesNote ? '\n' + driveBackup.filesNote : ''}
+              </Text>
+              <TouchableOpacity style={styles.soundRow} onPress={() => onDriveOption({ files: driveBackup.files === false })}>
+                <Text style={styles.stepTitle}>{driveBackup.files === false ? '☐' : '☑'} לגבות גם את קבצי המסמכים</Text>
+              </TouchableOpacity>
+              {driveBackup.files !== false ? (
+                <TouchableOpacity style={styles.soundRow} onPress={() => onDriveOption({ wifiOnly: driveBackup.wifiOnly === false })}>
+                  <Text style={styles.stepTitle}>{driveBackup.wifiOnly === false ? '☐' : '☑'} להעלות קבצים רק ב-Wi-Fi</Text>
+                </TouchableOpacity>
+              ) : null}
+              <Text style={styles.intro}>
+                הקבצים נשמרים בדרייב בתיקייה "גיבוי יומן ושולחן עבודה › מסמכים", באותו סדר תיקיות כמו בטלפון. רק קבצים חדשים או ששונו עולים מחדש.
               </Text>
               <TouchableOpacity style={styles.backupBtn} onPress={onDriveBackupNow}>
                 <Text style={styles.backupBtnText}>☁️ גבה לדרייב עכשיו</Text>

@@ -199,8 +199,8 @@ export default function SearchScreen({
                   />
                 ))}
               </Group>
-              <Group title="📁 מסמכים" count={docs?.length ?? 0}>
-                {(docs ?? []).map((d) => (
+              <Group title="📁 מסמכים" count={(docs ?? []).filter((d) => !lockedDocs.has(d.uri)).length}>
+                {(docs ?? []).filter((d) => !lockedDocs.has(d.uri)).map((d) => (
                   <Row
                     key={d.uri}
                     icon={lockedDocs.has(d.uri) ? '🔒' : '📄'}

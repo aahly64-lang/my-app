@@ -66,6 +66,11 @@ type GeoAlarmNative = {
   shareDocuments(uris: string[], mimes: string[]): boolean;
   copyIntoFolder(src: string, treeUri: string, name: string, mime: string): Promise<string | null>;
   createFolder(parentUri: string, name: string): Promise<string | null>;
+  copyToFile(src: string, dest: string): Promise<number>;
+  documentParent(uri: string): string | null;
+  isUnmetered(): boolean;
+  uploadToSession(src: string, sessionUrl: string, mime: string): Promise<{ status: number; body: string }>;
+  protectPdf(src: string, password: string, name: string): Promise<string | null>;
   scanDocument(quality: string): Promise<{ uri: string; pages: number } | null>;
   moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
@@ -164,6 +169,33 @@ export const GeoAlarm = {
   createFolder: async (parentUri: string, name: string): Promise<string | null> => {
     try {
       return native ? await native.createFolder(parentUri, name) : null;
+    } catch {
+      return null;
+    }
+  },
+  /** Copies a document into a local file (recycle bin). Bytes copied, or -1. */
+  copyToFile: async (src: string, dest: string): Promise<number> => {
+    try {
+      return native ? await native.copyToFile(src, dest) : -1;
+    } catch {
+      return -1;
+    }
+  },
+  /** The folder a document is in (usable as a folder uri), or null. */
+  documentParent: (uri: string) => safe(() => native!.documentParent(uri), null),
+  /** True on Wi-Fi / an unmetered network. */
+  isUnmetered: () => safe(() => native!.isUnmetered(), false),
+  uploadToSession: async (src: string, sessionUrl: string, mime: string): Promise<{ status: number; body: string }> => {
+    try {
+      return native ? await native.uploadToSession(src, sessionUrl, mime) : { status: 0, body: 'לא זמין' };
+    } catch (e: any) {
+      return { status: 0, body: String(e?.message ?? e) };
+    }
+  },
+  /** A password-protected copy of a PDF in the cache (file:// uri), or null. */
+  protectPdf: async (src: string, password: string, name: string): Promise<string | null> => {
+    try {
+      return native ? await native.protectPdf(src, password, name) : null;
     } catch {
       return null;
     }

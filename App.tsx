@@ -53,7 +53,10 @@ import {
   downloadDriveBackup,
   loadDriveBackup,
   runDriveBackup,
+  saveDriveBackup,
 } from './src/driveBackup';
+import { resetDocFilesIndex, syncDocFiles } from './src/driveFiles';
+import { purgeTrash } from './src/trash';
 
 /** Everything that goes into a backup, read from storage (safe to call from any listener). */
 async function gatherBackup(): Promise<BackupData> {
@@ -501,7 +504,11 @@ function AppInner({
         relock();
         // Daily automatic backup (only when a folder was chosen; at most once a day).
         runAutoBackup(gatherBackup).then(setAutoBackup).catch(() => {});
-        runDriveBackup(async () => buildPayload(await gatherBackup())).then(setDriveBackup).catch(() => {});
+        runDriveBackup(async () => buildPayload(await gatherBackup()))
+          .then(setDriveBackup)
+          .then(() => syncDocFiles())
+          .then(setDriveBackup)
+          .catch(() => {});
       }
       if (s === 'active') {
         setAreas(await loadAreas());
@@ -509,6 +516,7 @@ function AppInner({
         setTasksBadge(countDueToday(await loadTasks()));
         refreshPermissions();
         refreshMorning();
+        purgeTrash().catch(() => {});
       }
     });
     return () => sub.remove();
@@ -1002,16 +1010,39 @@ function AppInner({
     const done = await runDriveBackup(drivePayload, true);
     setDriveBackup(done);
     if (done.lastError) Alert.alert('גוגל דרייב', done.lastError);
-    else Alert.alert('גיבוי לגוגל דרייב פעיל ✓', 'נוצר גיבוי ראשון בתיקייה "גיבוי יומן ושולחן עבודה" בדרייב שלך. מעכשיו יישמר גיבוי פעם ביום.');
+    else {
+      Alert.alert(
+        'גיבוי לגוגל דרייב פעיל ✓',
+        'נוצר גיבוי ראשון בתיקייה "גיבוי יומן ושולחן עבודה" בדרייב שלך. מעכשיו יישמר גיבוי פעם ביום.\n\nגם קבצי המסמכים עולים עכשיו לדרייב (בפעם הראשונה זה יכול לקחת זמן). אפשר לראות את ההתקדמות בהגדרות.'
+      );
+      syncFilesNow(false);
+    }
+  };
+  const [driveFilesProgress, setDriveFilesProgress] = useState<{ done: number; total: number } | null>(null);
+  const syncFilesNow = async (report: boolean) => {
+    setDriveFilesProgress({ done: 0, total: 0 });
+    const done = await syncDocFiles(true, setDriveFilesProgress).catch(() => null);
+    setDriveFilesProgress(null);
+    if (!done) return;
+    setDriveBackup(done);
+    if (report && done.filesError) Alert.alert('גיבוי קבצי המסמכים', done.filesError);
   };
   const driveBackupNow = async () => {
     const done = await runDriveBackup(drivePayload, true);
     setDriveBackup(done);
-    Alert.alert('גוגל דרייב', done.lastError ?? 'הגיבוי נשמר בדרייב ✓');
+    Alert.alert('גוגל דרייב', done.lastError ?? 'הגיבוי נשמר בדרייב ✓' + (done.files !== false ? '\nקבצי המסמכים מתעדכנים עכשיו ברקע.' : ''));
+    if (!done.lastError) syncFilesNow(true);
+  };
+  const setDriveOption = async (patch: { files?: boolean; wifiOnly?: boolean }) => {
+    const next = { ...(await loadDriveBackup()), ...patch, filesError: undefined };
+    await saveDriveBackup(next);
+    setDriveBackup(next);
+    if (patch.files || patch.wifiOnly === false) syncFilesNow(false);
   };
   const disconnectGoogleDrive = () =>
     confirm('גוגל דרייב', 'להפסיק לגבות לגוגל דרייב? הגיבויים שכבר נשמרו נשארים בדרייב.', 'הפסק', async () => {
       await disconnectDrive();
+      await resetDocFilesIndex();
       setDriveBackup({ enabled: false });
     });
   const restoreFromDrive = async (id: string) => {
@@ -1750,6 +1781,8 @@ function AppInner({
         driveBackup={driveBackup}
         onConnectDrive={connectGoogleDrive}
         onDriveBackupNow={driveBackupNow}
+        driveFilesProgress={driveFilesProgress}
+        onDriveOption={setDriveOption}
         onDisconnectDrive={disconnectGoogleDrive}
         onRestoreDrive={restoreFromDrive}
         themeMode={themeMode}
