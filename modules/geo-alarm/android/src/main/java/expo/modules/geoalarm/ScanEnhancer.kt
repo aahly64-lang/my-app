@@ -205,7 +205,7 @@ object ScanEnhancer {
   }
 
   /** Decodes an image no bigger than maxSide, turned upright from its EXIF orientation, on a white background. */
-  private fun loadImage(ctx: Context, uri: Uri, maxSide: Int): Bitmap? {
+  internal fun loadImage(ctx: Context, uri: Uri, maxSide: Int): Bitmap? {
     val cr = ctx.contentResolver
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     val opened = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds); true } ?: false
@@ -275,7 +275,7 @@ object ScanEnhancer {
 
   // ---------------------------------------------------------------- PDF writer
 
-  private fun writePdf(os: OutputStream, pages: List<Triple<ByteArray, Int, Int>>) {
+  internal fun writePdf(os: OutputStream, pages: List<Triple<ByteArray, Int, Int>>) {
     val out = CountingStream(os)
     val offsets = ArrayList<Long>()
     fun obj(body: () -> Unit) {
@@ -332,7 +332,7 @@ object ScanEnhancer {
 
   // ---------------------------------------------------------------- images
 
-  private fun toJpeg(b: Bitmap, q: Int): ByteArray {
+  internal fun toJpeg(b: Bitmap, q: Int): ByteArray {
     val bos = ByteArrayOutputStream()
     b.compress(Bitmap.CompressFormat.JPEG, q, bos)
     return bos.toByteArray()

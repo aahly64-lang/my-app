@@ -82,7 +82,11 @@ type GeoAlarmNative = {
   isUnmetered(): boolean;
   uploadToSession(src: string, sessionUrl: string, mime: string): Promise<{ status: number; body: string }>;
   protectPdf(src: string, password: string, name: string): Promise<string | null>;
-  scanDocument(quality: string): Promise<{ uri: string; pages: number } | null>;
+  scanDocument(quality: string, pageLimit: number): Promise<{ uri: string; pages: number } | null>;
+  compressForShare(uri: string, mime: string, name: string): Promise<{ uri: string; size: number; mime: string } | null>;
+  cardOnePage(uri: string): Promise<string | null>;
+  readText(uri: string, mime: string, maxPages: number): Promise<string | null>;
+  signPdf(src: string, page: number, png: string, x: number, y: number, w: number): Promise<string | null>;
   moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
   combinePdf(uris: string[], mimes: string[], quality: string, overwrite: string | null): Promise<string | null>;
@@ -240,9 +244,38 @@ export const GeoAlarm = {
       return null;
     }
   },
-  scanDocument: async (quality = 'normal'): Promise<{ uri: string; pages: number } | null> => {
+  scanDocument: async (quality = 'normal', pageLimit = 30): Promise<{ uri: string; pages: number } | null> => {
     if (!native) throw new Error('לא זמין במכשיר הזה');
-    return native.scanDocument(quality);
+    return native.scanDocument(quality, pageLimit);
+  },
+  compressForShare: async (uri: string, mime: string, name: string) => {
+    try {
+      return native ? await native.compressForShare(uri, mime, name) : null;
+    } catch {
+      return null;
+    }
+  },
+  /** Text of a scan / picture, read on the phone (Hebrew + English). null = couldn't read. */
+  readText: async (uri: string, mime: string, maxPages = 1): Promise<string | null> => {
+    try {
+      return native ? await native.readText(uri, mime, maxPages) : null;
+    } catch {
+      return null;
+    }
+  },
+  cardOnePage: async (uri: string): Promise<string | null> => {
+    try {
+      return native ? await native.cardOnePage(uri) : null;
+    } catch {
+      return null;
+    }
+  },
+  signPdf: async (src: string, page: number, png: string, x: number, y: number, w: number): Promise<string | null> => {
+    try {
+      return native ? await native.signPdf(src, page, png, x, y, w) : null;
+    } catch {
+      return null;
+    }
   },
   moveDocument: async (src: string, srcParent: string, destFolder: string): Promise<MoveResult> => {
     try {

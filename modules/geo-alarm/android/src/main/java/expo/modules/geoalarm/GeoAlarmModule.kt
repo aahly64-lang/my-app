@@ -255,6 +255,24 @@ class GeoAlarmModule : Module() {
       DocumentsHelper.thumbnail(context, uri, mime, size, stamp.toLong())
     }
 
+    // ---------- documents: text from scans (on the phone) ----------
+    AsyncFunction("readText") { uri: String, mime: String, maxPages: Int ->
+      DocsOcr.read(context, uri, mime, maxPages)
+    }
+
+    // ---------- documents: shrink, two-sided card, sign ----------
+    AsyncFunction("compressForShare") { uri: String, mime: String, name: String ->
+      DocsTools.compress(context, uri, mime, name)
+    }
+
+    AsyncFunction("cardOnePage") { uri: String ->
+      DocsTools.cardOnePage(context, uri)
+    }
+
+    AsyncFunction("signPdf") { src: String, page: Int, png: String, x: Double, y: Double, w: Double ->
+      DocsTools.signPdf(context, src, page, png, x, y, w)
+    }
+
     // ---------- documents stage C: preview + duplicates ----------
     AsyncFunction("pdfPageCount") { uri: String ->
       DocsPreview.pdfPageCount(context, uri)
@@ -381,7 +399,7 @@ class GeoAlarmModule : Module() {
     }
 
     /** Google's document scanner: returns the content uri of the scanned PDF, or null if cancelled. */
-    AsyncFunction("scanDocument") { quality: String, promise: Promise ->
+    AsyncFunction("scanDocument") { quality: String, pageLimit: Int, promise: Promise ->
       val activity = appContext.currentActivity
       if (activity == null) {
         promise.reject("ERR_SCAN", "אין מסך פעיל", null)
@@ -393,7 +411,7 @@ class GeoAlarmModule : Module() {
       try {
         val options = com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder()
           .setGalleryImportAllowed(true)
-          .setPageLimit(30)
+          .setPageLimit(pageLimit.coerceIn(1, 30))
           .setResultFormats(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
           .setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL)
           .build()

@@ -17,17 +17,18 @@ export interface PersonalSlot {
   icon: string;
   expires: boolean; // the document has an expiry date
   yearly?: boolean; // renewed every year
+  card?: boolean; // a card: scanned front + back onto one page
 }
 
 /** The "personal file": the documents most people need to have at hand. */
 export const PERSONAL_SLOTS: PersonalSlot[] = [
-  { key: 'id', label: 'תעודת זהות', icon: '🪪', expires: true },
+  { key: 'id', label: 'תעודת זהות', icon: '🪪', expires: true, card: true },
   { key: 'idAppendix', label: 'ספח תעודת זהות', icon: '📄', expires: false },
-  { key: 'license', label: 'רישיון נהיגה', icon: '🚗', expires: true },
+  { key: 'license', label: 'רישיון נהיגה', icon: '🚗', expires: true, card: true },
   { key: 'passport', label: 'דרכון', icon: '🛂', expires: true },
   { key: 'carLicense', label: 'רישיון רכב', icon: '🚙', expires: true, yearly: true },
   { key: 'carInsurance', label: 'ביטוח רכב', icon: '🛡️', expires: true, yearly: true },
-  { key: 'healthCard', label: 'כרטיס קופת חולים', icon: '🏥', expires: false },
+  { key: 'healthCard', label: 'כרטיס קופת חולים', icon: '🏥', expires: false, card: true },
   { key: 'homeInsurance', label: 'ביטוח דירה', icon: '🏠', expires: true, yearly: true },
 ];
 

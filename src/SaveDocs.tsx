@@ -5,6 +5,7 @@ import { GeoAlarm } from '../modules/geo-alarm';
 import { Palette, useTheme, useThemedStyles } from './theme';
 import { PopupShell } from './ui';
 import { docIcon } from './docLinks';
+import { OcrSuggestion, suggestFromText } from './ocrSuggest';
 import {
   DocFolder,
   DocLink,
@@ -261,22 +262,43 @@ type SaveDocs = ReturnType<typeof useSaveDocs>;
  * Scan with Google's scanner, then ask for a name and a folder.
  * Returns the saved document, or null (cancelled / no folder / scanner not available).
  */
-export async function scanAndSave(s: SaveDocs, folder?: DocFolder, name?: string): Promise<DocLink | null> {
+export type ScannedDoc = DocLink & { suggest: OcrSuggestion };
+
+/**
+ * Scan with Google's scanner, read the text on the phone (to suggest a name and an expiry date),
+ * then ask for a name and a folder. card = front and back of a card on one page.
+ * Returns the saved document with the suggestions, or null (cancelled / no folder / scanner not available).
+ */
+export async function scanAndSave(
+  s: SaveDocs,
+  folder?: DocFolder,
+  name?: string,
+  opts?: { card?: boolean }
+): Promise<ScannedDoc | null> {
   const quality = await loadScanQuality();
   let r: { uri: string; pages: number } | null = null;
   try {
-    r = await s.busy('⏳ משפר את הדפים הסרוקים…', () => GeoAlarm.scanDocument(quality));
+    r = await s.busy('⏳ משפר את הדפים הסרוקים…', () => GeoAlarm.scanDocument(quality, opts?.card ? 2 : 30));
   } catch (e: any) {
     Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (e?.message ?? ''));
     return null;
   }
   if (!r) return null;
+  let src = r.uri;
+  if (opts?.card) {
+    const one = await s.busy('⏳ מסדר את שני הצדדים בעמוד אחד…', () => GeoAlarm.cardOnePage(r!.uri));
+    if (one) src = one;
+    else Alert.alert('סריקת כרטיס', 'לא הצלחתי לסדר את הצדדים בעמוד אחד, נשמרה הסריקה הרגילה.');
+  }
+  const text = await s.busy('⏳ קורא את הטקסט שבסריקה…', () => GeoAlarm.readText(r!.uri, 'application/pdf', 2));
+  const suggest = suggestFromText(text);
   const saved = await s.ask({
-    title: '📷 שמירת הסריקה',
-    files: [{ src: r.uri, name: (name || scanName()) + '.pdf', mime: 'application/pdf' }],
+    title: opts?.card ? '🪪 שמירת הכרטיס' : '📷 שמירת הסריקה',
+    files: [{ src, name: (name || suggest.name || (opts?.card ? 'כרטיס' : scanName())) + '.pdf', mime: 'application/pdf' }],
     folder,
   });
-  return saved?.[0] ?? null;
+  const d = saved?.[0];
+  return d ? { ...d, suggest } : null;
 }
 
 const makeStyles = (c: Palette) => ({

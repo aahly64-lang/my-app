@@ -1483,7 +1483,8 @@ function AppInner({
                 style={styles.doneBtn}
                 onPress={async () => {
                   const id = selectedNote.id;
-                  const d = await scanAndSave(noteSaver);
+                  const r = await scanAndSave(noteSaver);
+                  const d = r ? { uri: r.uri, name: r.name, mime: r.mime } : null;
                   if (d)
                     setNotes((prev) =>
                       prev.map((n) => (n.id === id ? { ...n, docs: [...(n.docs ?? []).filter((x) => x.uri !== d.uri), d] } : n))

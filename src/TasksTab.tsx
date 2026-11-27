@@ -324,7 +324,8 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
 
   /** Scan a document straight into the task being edited. */
   const scanToTask = async () => {
-    const d = await scanAndSave(saver);
+    const r = await scanAndSave(saver);
+    const d = r ? { uri: r.uri, name: r.name, mime: r.mime } : null;
     if (d) setEdit((e) => (e ? { ...e, docs: [...(e.docs ?? []).filter((x) => x.uri !== d.uri), d] } : e));
   };
 

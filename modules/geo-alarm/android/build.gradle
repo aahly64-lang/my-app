@@ -17,8 +17,16 @@ android {
   }
 }
 
+repositories {
+  google()
+  mavenCentral()
+  maven { url "https://jitpack.io" }
+}
+
 dependencies {
   implementation "androidx.core:core-ktx:1.13.1"
+  // reading text from scans on the phone (Hebrew + English), for name / expiry suggestions
+  implementation "cz.adaptech.tesseract4android:tesseract4android:4.9.0"
   implementation "com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1"
   // password-protected PDF when sharing
   // (only password encryption is used: the certificate / signing parts of BouncyCastle are left out)

@@ -37,6 +37,8 @@ import { canLock, ensureUnlocked } from './lock';
 import { cancelRing, scheduleReminder } from './rings';
 import { refreshMorning } from './morning';
 import { PendingFile, scanAndSave, scanName, useSaveDocs } from './SaveDocs';
+import DocSign from './DocSign';
+import { OcrSuggestion, suggestFromText } from './ocrSuggest';
 import DocPreview from './DocPreview';
 import { DATE_FILTERS, DateFilter, PERSONAL_SLOTS, PersonalSlot, addYear, allTags, passesDate, slotOf } from './docInfo';
 import {
@@ -232,7 +234,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   const [recent, setRecent] = useState<RecentDoc[]>([]);
   const [menu, setMenu] = useState<DocEntry | null>(null);
   const [panel, setPanel] = useState<
-    'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages' | 'protect' | 'note' | 'tags' | 'personal'
+    'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages' | 'protect' | 'note' | 'tags' | 'personal' | 'ocr'
   >('menu');
   const [password, setPassword] = useState('');
   // recycle bin
@@ -449,7 +451,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   };
 
   // ---------- scanning / new PDFs ----------
-  const afterSaved = (saved: DocLink[] | null, what: string) => {
+  const afterSaved = (saved: DocLink[] | null, what: string, quiet = false) => {
     if (!saved || !saved.length) return;
     refresh();
     const rec = [
@@ -458,6 +460,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     ].slice(0, 20);
     setRecent(rec);
     saveDocRecent(rec);
+    if (quiet) return;
     if (saved.length > 1) {
       Alert.alert('נשמר ✓', `${saved.length} קבצים נשמרו.`);
       return;
@@ -471,9 +474,11 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     ]);
   };
 
-  const scan = async () => {
-    const d = await scanAndSave(saver, current);
-    afterSaved(d ? [d] : null, 'הסריקה');
+  const scan = async (card = false) => {
+    const d = await scanAndSave(saver, current, undefined, { card });
+    if (!d) return;
+    if (offerSuggest(d, d.suggest, 'נשמר ✓')) afterSaved([d], 'הסריקה', true);
+    else afterSaved([d], card ? 'הכרטיס' : 'הסריקה');
   };
 
   /** Photos from the gallery, in the order picked, into one PDF. */
@@ -970,10 +975,95 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   };
 
   const scanToSlot = async (slot: PersonalSlot) => {
-    const d = await scanAndSave(saver, current, slot.label);
+    const d = await scanAndSave(saver, current, slot.label, { card: slot.card });
     if (!d) return;
     await assignSlot(d, slot.key);
-    afterSaved([d], 'המסמך');
+    const sg = { ...d.suggest, slot: undefined };
+    if (offerSuggest(d, sg, 'נשמר בתיק ✓')) afterSaved([d], 'המסמך', true);
+    else afterSaved([d], 'המסמך');
+  };
+
+  // ---------- suggestions from the scan's text (read on the phone) ----------
+  /** Offers the expiry / personal-file slot / tag found in the text. Returns false when there is nothing to offer. */
+  const offerSuggest = (e: DocLink, sg: OcrSuggestion, title: string) => {
+    const cur = metaRef.current[e.uri];
+    const parts: string[] = [];
+    const exp = sg.expiry && !cur?.expiry && (sg.expiryByKeyword || daysUntil(sg.expiry) >= 0) ? sg.expiry : undefined;
+    if (exp) parts.push(`📅 תוקף עד ${displayYMD(exp)}${sg.expiryByKeyword ? '' : ' (ניחוש)'}, עם תזכורת חודש לפני`);
+    const slot = slotOf(sg.slot);
+    const slotOk = !!slot && !cur?.personal && !personalState.bySlot.has(slot.key);
+    if (slotOk) parts.push(`🗂️ לתיק האישי: ${slot!.label}`);
+    const tag = sg.tag && !(cur?.tags ?? []).includes(sg.tag) ? sg.tag : undefined;
+    if (tag) parts.push(`🏷️ תגית: ${tag}`);
+    if (!parts.length) return false;
+    Alert.alert(title, `"${e.name}"\n\nמהטקסט שבסריקה זיהיתי:\n${parts.join('\n')}\n\nלהוסיף?`, [
+      { text: 'לא תודה', style: 'cancel' },
+      { text: 'הוסף', onPress: () => applySuggest(e, exp, slotOk ? slot!.key : undefined, tag) },
+    ]);
+    return true;
+  };
+  const applySuggest = async (e: DocLink, expiry?: string, slotKey?: string, tag?: string) => {
+    if (slotKey) await assignSlot(e, slotKey);
+    const cur = metaRef.current[e.uri];
+    const patch: Partial<DocMeta> = { name: e.name, mime: e.mime };
+    if (expiry) {
+      patch.expiry = expiry;
+      patch.remindDays = cur?.remindDays ?? 30;
+    }
+    if (tag) patch.tags = [...new Set([...(cur?.tags ?? []), tag])];
+    const m = await updateMeta(e.uri, patch, e);
+    if (m?.expiry) await scheduleExpiry(e.uri, m);
+    refreshMorning();
+  };
+
+  const [ocr, setOcr] = useState<{ text: string | null; sg: OcrSuggestion } | null>(null);
+  const readDocText = async (e: DocEntry) => {
+    setOcr(null);
+    setPanel('ocr');
+    const text = await GeoAlarm.readText(e.uri, e.mime, 2);
+    setOcr({ text, sg: suggestFromText(text) });
+  };
+
+  // ---------- shrink before sending ----------
+  const shareSmall = async (e: DocEntry) => {
+    if (meta[e.uri]?.locked && !(await ensureUnlocked('שיתוף מסמך נעול'))) return;
+    const r = await saver.busy('⏳ מכווץ את הקובץ…', () => GeoAlarm.compressForShare(e.uri, e.mime, e.name));
+    if (!r) {
+      Alert.alert('שיתוף מכווץ', 'לא הצלחתי לכווץ את הקובץ.');
+      return;
+    }
+    const orig = e.size || meta[e.uri]?.size || 0;
+    const share = () => Sharing.shareAsync(r.uri, { mimeType: r.mime, dialogTitle: 'שיתוף מכווץ' }).catch(() => {});
+    if (orig && r.size >= orig * 0.95) {
+      Alert.alert('שיתוף מכווץ', `הקובץ כבר קטן (${sizeText(orig)}), הכיווץ לא חוסך.`, [
+        { text: 'ביטול', style: 'cancel' },
+        { text: 'שתף את המקורי', onPress: () => GeoAlarm.shareDocument(e.uri, e.mime) },
+      ]);
+      return;
+    }
+    closeMenu();
+    Alert.alert('📦 כווץ ✓', orig ? `${sizeText(orig)} ← ${sizeText(r.size)}` : `גודל: ${sizeText(r.size)}`, [
+      { text: 'ביטול', style: 'cancel' },
+      { text: 'שתף', onPress: share },
+    ]);
+  };
+
+  // ---------- signing ----------
+  const [signing, setSigning] = useState<DocEntry | null>(null);
+  const startSign = async (e: DocEntry) => {
+    if (meta[e.uri]?.locked && !(await ensureUnlocked('חתימה על מסמך נעול'))) return;
+    closeMenu();
+    setPreview(null);
+    setSigning(e);
+  };
+  const onSigned = async (file: string, e: DocEntry) => {
+    setSigning(null);
+    const saved = await saver.ask({
+      title: '✍️ שמירת המסמך החתום',
+      files: [{ src: file, name: e.name.replace(/\.[^.]+$/, '') + ' - חתום.pdf', mime: 'application/pdf' }],
+      folder: current,
+    });
+    afterSaved(saved, 'המסמך החתום');
   };
 
   const toggleSlotHidden = (key: string) => {
@@ -1436,6 +1526,13 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               GeoAlarm.shareDocument(menu.uri, menu.mime);
             }}
           />
+          {canPreview(menu.mime) ? (
+            <MenuItem styles={styles} label="📦  שיתוף מכווץ (קובץ קטן לוואטסאפ ומייל)" onPress={() => shareSmall(menu)} />
+          ) : null}
+          {canPreview(menu.mime) ? <MenuItem styles={styles} label="✍️  חתימה על המסמך" onPress={() => startSign(menu)} /> : null}
+          {canPreview(menu.mime) ? (
+            <MenuItem styles={styles} label="🔎  זהה טקסט (הצעת שם ותוקף)" onPress={() => readDocText(menu)} />
+          ) : null}
           {menu.mime.includes('pdf') || menu.mime.startsWith('image/') ? (
             <MenuItem
               styles={styles}
@@ -1473,6 +1570,69 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
           <MenuItem styles={styles} label={m?.archived ? '📤  הוצא מהארכיון' : '🗄️  העבר לארכיון'} onPress={() => toggleArchive(menu)} />
           <MenuItem styles={styles} label="🗑️  מחיקה" danger onPress={() => doDelete(menu)} />
         </>
+      ) : null}
+
+      {menu && panel === 'ocr' ? (
+        !ocr ? (
+          <View style={{ paddingVertical: 20 }}>
+            <ActivityIndicator />
+            <Text style={[styles.hint, { textAlign: 'center' }]}>⏳ קורא את הטקסט (בתוך הטלפון)…</Text>
+          </View>
+        ) : (
+          <>
+            {!ocr.text || !ocr.text.trim() ? (
+              <Text style={styles.hint}>לא הצלחתי לקרוא טקסט מהקובץ (אולי הסריקה לא חדה, או שהקובץ מוגן).</Text>
+            ) : null}
+            {ocr.sg.name ? (
+              <MenuItem
+                styles={styles}
+                label={`✏️  שנה שם ל"${ocr.sg.name}"`}
+                onPress={() => {
+                  setRenameText(ocr.sg.name!);
+                  setPanel('rename');
+                }}
+              />
+            ) : null}
+            {ocr.sg.expiry ? (
+              <MenuItem
+                styles={styles}
+                label={`📅  קבע תוקף ${displayYMD(ocr.sg.expiry)}${ocr.sg.expiryByKeyword ? '' : ' (ניחוש)'}`}
+                onPress={async () => {
+                  await applySuggest(menu, ocr.sg.expiry);
+                  setPanel('expiry');
+                }}
+              />
+            ) : null}
+            {slotOf(ocr.sg.slot) && m?.personal !== ocr.sg.slot ? (
+              <MenuItem
+                styles={styles}
+                label={`🗂️  הוסף לתיק האישי: ${slotOf(ocr.sg.slot)!.label}`}
+                onPress={async () => {
+                  await applySuggest(menu, undefined, ocr.sg.slot);
+                  setPanel('menu');
+                }}
+              />
+            ) : null}
+            {ocr.sg.tag && !(m?.tags ?? []).includes(ocr.sg.tag) ? (
+              <MenuItem
+                styles={styles}
+                label={`🏷️  הוסף תגית: ${ocr.sg.tag}`}
+                onPress={() => applySuggest(menu, undefined, undefined, ocr.sg.tag)}
+              />
+            ) : null}
+            {ocr.text && ocr.text.trim() && !ocr.sg.name && !ocr.sg.expiry ? (
+              <Text style={styles.hint}>לא מצאתי שם או תאריך תוקף בטקסט.</Text>
+            ) : null}
+            {ocr.text && ocr.text.trim() ? (
+              <>
+                <Text style={styles.label}>הטקסט שזוהה</Text>
+                <Text style={styles.ocrText} selectable>
+                  {ocr.text.trim().slice(0, 1500)}
+                </Text>
+              </>
+            ) : null}
+          </>
+        )
       ) : null}
 
       {menu && panel === 'note' ? (
@@ -1936,7 +2096,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               ) : (
                 <>
                   <TouchableOpacity style={styles.trashBtn} onPress={() => scanToSlot(slot)}>
-                    <Text style={styles.actionText}>📷 סרוק</Text>
+                    <Text style={styles.actionText}>{slot.card ? '🪪 סרוק 2 צדדים' : '📷 סרוק'}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={styles.trashBtn} onPress={() => toggleSlotHidden(slot.key)}>
                     <Text style={styles.actionText}>לא רלוונטי לי</Text>
@@ -2049,6 +2209,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       {personalPopup}
       {dupesPopup}
       {previewEl}
+      <DocSign entry={signing} onClose={() => setSigning(null)} onSigned={onSigned} />
     </>
   );
 
@@ -2063,7 +2224,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
             {viewToggle}
           </View>
           <View style={styles.actionsRow}>
-            <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={scan}>
+            <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={() => scan()}>
               <Text style={styles.actionPrimaryText}>📷 סרוק מסמך</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={connectFolder}>
@@ -2076,9 +2237,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity style={[styles.actionBtn, styles.galleryBtn]} onPress={imagesToPdf}>
-            <Text style={styles.actionText}>🖼️ תמונות מהגלריה ל-PDF</Text>
-          </TouchableOpacity>
+          <View style={styles.actionsRow2}>
+            <TouchableOpacity style={styles.actionBtn} onPress={imagesToPdf}>
+              <Text style={styles.actionText}>🖼️ תמונות ל-PDF</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => scan(true)}>
+              <Text style={styles.actionText}>🪪 כרטיס (2 צדדים)</Text>
+            </TouchableOpacity>
+          </View>
           {scanBusy ? <Text style={styles.popupHint}>⏳ משפר את הדפים הסרוקים…</Text> : qualityLine}
           <TextInput
             style={styles.input}
@@ -2247,7 +2413,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               {viewToggle}
             </View>
             <View style={styles.actionsRow}>
-              <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={scan}>
+              <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={() => scan()}>
                 <Text style={styles.actionPrimaryText}>📷 סרוק לכאן</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.actionBtn} onPress={() => setNewFolder('')}>
@@ -2259,9 +2425,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
                 </TouchableOpacity>
               ) : null}
             </View>
-            <TouchableOpacity style={[styles.actionBtn, styles.galleryBtn]} onPress={imagesToPdf}>
-              <Text style={styles.actionText}>🖼️ תמונות מהגלריה ל-PDF</Text>
-            </TouchableOpacity>
+            <View style={styles.actionsRow2}>
+              <TouchableOpacity style={styles.actionBtn} onPress={imagesToPdf}>
+                <Text style={styles.actionText}>🖼️ תמונות ל-PDF</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionBtn} onPress={() => scan(true)}>
+                <Text style={styles.actionText}>🪪 כרטיס (2 צדדים)</Text>
+              </TouchableOpacity>
+            </View>
             {scanBusy ? <Text style={styles.popupHint}>⏳ מעבד את הקובץ…</Text> : qualityLine}
             {entries.some((e) => !e.isDir) ? (
               <Text style={styles.popupHint}>טיפ: לחיצה ארוכה על קובץ וגרירה: אל תיקייה כדי להעביר, או על קובץ אחר כדי לשנות סדר. ⋮ לתפריט.</Text>
@@ -2376,6 +2547,8 @@ const makeStyles = (c: Palette) => ({
   title: { fontSize: 22, fontWeight: '800' as const, color: c.text, flexShrink: 1 },
   actionsRow: { flexDirection: 'row' as const, gap: 8, marginTop: 10, marginBottom: 10 },
   galleryBtn: { flex: 0, marginBottom: 8 },
+  actionsRow2: { flexDirection: 'row' as const, gap: 8, marginBottom: 8 },
+  ocrText: { fontSize: 13, color: c.text2, lineHeight: 19, backgroundColor: c.subtle, borderRadius: 10, padding: 10 },
   actionBtn: {
     flex: 1,
     minHeight: 46,
