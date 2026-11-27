@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { tabTimings } from './perf';
+
 import {
   Alert,
   AppState,
@@ -20,6 +22,14 @@ import { ringNow } from './rings';
 import { displayYMD } from './pickers';
 import { ACCENTS, Palette, ThemeMode, cardShadow, useTheme, withFonts } from './theme';
 import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
+
+const TAB_NAMES: Record<string, string> = {
+  notes: 'פתקים',
+  tasks: 'משימות',
+  workouts: 'כושר',
+  alarms: 'שעונים',
+  docs: 'מסמכים',
+};
 
 const SOUND_ROWS: [SoundKind, string][] = [
   ['alarm', '⏰ שעון מעורר'],
@@ -481,6 +491,20 @@ export default function SetupScreen({
           <TouchableOpacity style={[styles.backupBtn, styles.restoreBtn]} onPress={onImport}>
             <Text style={[styles.backupBtnText, styles.restoreText]}>⬇️ שחזר מקובץ גיבוי</Text>
           </TouchableOpacity>
+
+          <Text style={styles.section}>⏱ מהירות מעבר בין טאבים</Text>
+          <Text style={styles.intro}>
+            הזמן מהלחיצה על טאב עד שהוא מוצג, ב-15 המעברים האחרונים (החדש למעלה). 1000 = שנייה.
+          </Text>
+          {tabTimings().length === 0 ? (
+            <Text style={styles.intro}>עדיין אין מדידות. עבור בין כמה טאבים ופתח שוב את ההגדרות.</Text>
+          ) : (
+            tabTimings().map((t) => (
+              <Text key={t.at} style={styles.intro}>
+                {TAB_NAMES[t.tab] ?? t.tab}: {t.ms} אלפיות שנייה{t.first ? ' (כניסה ראשונה)' : ''}
+              </Text>
+            ))
+          )}
         </ScrollView>
       </SafeAreaView>
     </Modal>

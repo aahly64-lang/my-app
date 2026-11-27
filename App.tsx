@@ -31,6 +31,7 @@ import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
 import SearchScreen from './src/SearchScreen';
 import { openDoc } from './src/docLinks';
+import { Pane, WhenOpen, markTabPress } from './src/perf';
 import DocsTab from './src/DocsTab';
 import { syncGeofences, MIN_RADIUS_M, quietSetup } from './src/geoTask';
 import {
@@ -160,6 +161,38 @@ const TABS: [MainTab, string, string][] = [
   ['alarms', 'clock', 'שעונים'],
   ['docs', 'folder', 'מסמכים'],
 ];
+
+/** The tab bar lights up the pressed tab at once; the page itself follows right after. */
+function TabBar({ active, onSelect, tasksBadge }: { active: MainTab; onSelect: (t: MainTab) => void; tasksBadge: number }) {
+  const styles = useAppStyles();
+  const c = useTheme();
+  const [sel, setSel] = useState<MainTab>(active);
+  useEffect(() => setSel(active), [active]);
+  const press = (key: MainTab) => {
+    if (key === active) return;
+    setSel(key);
+    markTabPress(key);
+    // let the phone draw the lit tab first, then build/show the page
+    requestAnimationFrame(() => setTimeout(() => onSelect(key), 0));
+  };
+  return (
+    <View style={styles.tabBar}>
+      {TABS.map(([key, icon, label]) => (
+        <TouchableOpacity key={key} style={[styles.tabBtn, sel === key && styles.tabBtnActive]} onPress={() => press(key)}>
+          <View>
+            <TabIcon name={icon} color={sel === key ? c.onAccent : c.muted} />
+            {key === 'tasks' && tasksBadge > 0 ? (
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>{tasksBadge}</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={[styles.tabText, sel === key && styles.tabTextActive]}>{label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
 
 function TabIcon({ name, color }: { name: string; color: string }) {
   if (name === 'dumbbell') return <MaterialCommunityIcons name="dumbbell" size={21} color={color} />;
@@ -1158,6 +1191,7 @@ function AppInner({
           </TouchableOpacity>
         </View>
       </View>
+      <WhenOpen open={searchVisible}>
       <SearchScreen
         visible={searchVisible}
         notes={notes}
@@ -1186,30 +1220,13 @@ function AppInner({
           },
         }}
       />
+      </WhenOpen>
 
-      <View style={styles.tabBar}>
-        {TABS.map(([key, icon, label]) => (
-          <TouchableOpacity
-            key={key}
-            style={[styles.tabBtn, activeTab === key && styles.tabBtnActive]}
-            onPress={() => setActiveTab(key)}
-          >
-            <View>
-              <TabIcon name={icon} color={activeTab === key ? c.onAccent : c.muted} />
-              {key === 'tasks' && tasksBadge > 0 ? (
-                <View style={styles.tabBadge}>
-                  <Text style={styles.tabBadgeText}>{tasksBadge}</Text>
-                </View>
-              ) : null}
-            </View>
-            <Text style={[styles.tabText, activeTab === key && styles.tabTextActive]}>{label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      <TabBar active={activeTab} onSelect={setActiveTab} tasksBadge={tasksBadge} />
 
       {/* A tab is built on its first visit and then stays ready in the background (hidden), so switching back is instant. */}
       {visited.has('tasks') ? (
-        <View style={activeTab === 'tasks' ? styles.tabPane : styles.tabPaneHidden}>
+        <Pane name="tasks" active={activeTab === 'tasks'}>
           <TasksTab
             dataVersion={dataVersion}
             onCountChange={setTasksBadge}
@@ -1218,20 +1235,20 @@ function AppInner({
             onOpenedTask={onOpenedTask}
             active={activeTab === 'tasks'}
           />
-        </View>
+        </Pane>
       ) : null}
       {visited.has('workouts') ? (
-        <View style={activeTab === 'workouts' ? styles.tabPane : styles.tabPaneHidden}>
+        <Pane name="workouts" active={activeTab === 'workouts'}>
           <WorkoutsTab
             dataVersion={dataVersion}
             shared={shared}
             onSharedUsed={onSharedUsed}
             active={activeTab === 'workouts'}
           />
-        </View>
+        </Pane>
       ) : null}
       {visited.has('docs') ? (
-        <View style={activeTab === 'docs' ? styles.tabPane : styles.tabPaneHidden}>
+        <Pane name="docs" active={activeTab === 'docs'}>
           <DocsTab
             dataVersion={dataVersion}
             notes={docNotes}
@@ -1240,13 +1257,14 @@ function AppInner({
             onAttachToNote={onAttachToNote}
             active={activeTab === 'docs'}
           />
-        </View>
+        </Pane>
       ) : null}
 
-      {activeTab === 'notes' || activeTab === 'alarms' ? (
+      {visited.has('notes') ? (
+      <Pane name="notes" active={activeTab === 'notes'}>
       <ScrollView style={styles.desk} contentContainerStyle={styles.deskContent} keyboardShouldPersistTaps="handled">
         {/* ---------- notes ---------- */}
-        {activeTab === 'notes' && (
+        {(
           <View>
             <View style={styles.topActionBar}>
               <Text style={styles.sectionTitle}>שולחן עבודה</Text>
@@ -1313,7 +1331,14 @@ function AppInner({
         )}
 
         {/* ---------- Tab 3: timer + location areas ---------- */}
-        {activeTab === 'alarms' && (
+      </ScrollView>
+      </Pane>
+      ) : null}
+
+      {visited.has('alarms') ? (
+      <Pane name="alarms" active={activeTab === 'alarms'}>
+      <ScrollView style={styles.desk} contentContainerStyle={styles.deskContent} keyboardShouldPersistTaps="handled">
+        {(
           <View>
             <TouchableOpacity style={styles.ringtoneCta} onPress={() => setRingtonesVisible(true)}>
               <Text style={styles.ringtoneCtaIcon}>🎵</Text>
@@ -1456,9 +1481,11 @@ function AppInner({
           </View>
         )}
       </ScrollView>
+      </Pane>
       ) : null}
 
       {/* ---------- note screens (full screen) ---------- */}
+      <WhenOpen open={createVisible}>
       <NoteScreen
         visible={createVisible}
         isNew
@@ -1477,7 +1504,9 @@ function AppInner({
         onSave={createNote}
         onClose={closeCreate}
       />
+      </WhenOpen>
 
+      <WhenOpen open={!!selectedNote}>
       <NoteScreen
         visible={!!selectedNote}
         isNew={false}
@@ -1556,10 +1585,12 @@ function AppInner({
           ) : null
         }
       />
+      </WhenOpen>
 
       {noteSaver.element}
 
       {/* ---------- popup: area details ---------- */}
+      <WhenOpen open={!!areaForm}>
       <PopupShell
         visible={!!areaForm}
         title={areaForm?.id ? 'עריכת אזור' : 'אזור חדש'}
@@ -1642,8 +1673,10 @@ function AppInner({
           </>
         ) : null}
       </PopupShell>
+      </WhenOpen>
 
       {/* ---------- popup: alarm clock ---------- */}
+      <WhenOpen open={!!alarmForm}>
       <PopupShell
         visible={!!alarmForm}
         title={alarmFormIsNew ? 'שעון מעורר חדש' : 'עריכת שעון מעורר'}
@@ -1745,9 +1778,13 @@ function AppInner({
           </>
         ) : null}
       </PopupShell>
+      </WhenOpen>
 
+      <WhenOpen open={logMapVisible}>
       <GeoLogMap visible={logMapVisible} entries={geoLog ?? []} areas={areas} onClose={() => setLogMapVisible(false)} />
+      </WhenOpen>
 
+      <WhenOpen open={mapVisible}>
       <MapPicker
         visible={mapVisible}
         initial={mapInitial}
@@ -1755,7 +1792,9 @@ function AppInner({
         onClose={onMapClosed}
         onSave={onMapSaved}
       />
+      </WhenOpen>
 
+      <WhenOpen open={geoLog !== null}>
       <PopupShell visible={geoLog !== null} title="📋 יומן מיקום" onClose={() => setGeoLog(null)} yellow={false}>
         <Text style={styles.itemSub}>
           כאן רואים מתי הטלפון זיהה כניסה או יציאה מאזור, והאם צלצל. 50 האירועים האחרונים, החדש למעלה.
@@ -1794,9 +1833,13 @@ function AppInner({
           </TouchableOpacity>
         ) : null}
       </PopupShell>
+      </WhenOpen>
 
+      <WhenOpen open={ringtonesVisible}>
       <RingtonesScreen visible={ringtonesVisible} onClose={() => setRingtonesVisible(false)} />
+      </WhenOpen>
 
+      <WhenOpen open={setupVisible}>
       <SetupScreen
         visible={setupVisible}
         onClose={() => {
@@ -1823,6 +1866,7 @@ function AppInner({
         accent={accent}
         onAccent={setAccent}
       />
+      </WhenOpen>
     </SafeAreaView>
   );
 }
