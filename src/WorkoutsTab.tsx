@@ -85,11 +85,13 @@ interface Props {
   dataVersion: number;
   shared: SharedLink | null;
   onSharedUsed: () => void;
+  /** the tab is on screen (it stays mounted in the background after the first visit) */
+  active?: boolean;
 }
 
 type Rename = { kind: 'group' | 'sub'; id: string; name: string } | null;
 
-export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props) {
+function WorkoutsTab({ dataVersion, shared, onSharedUsed, active = true }: Props) {
   const styles = useAppStyles();
   const c = useTheme();
   const [groups, setGroups] = useState<WorkoutGroup[]>([]);
@@ -140,6 +142,7 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
 
   // The phone's back button goes up one level instead of leaving the app.
   useEffect(() => {
+    if (!active) return; // hidden tab: leave the back button to the screen that is shown
     const h = BackHandler.addEventListener('hardwareBackPress', () => {
       if (filter && !groupId) {
         setFilter(null);
@@ -156,7 +159,7 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
       return false;
     });
     return () => h.remove();
-  }, [groupId, subId, filter]);
+  }, [groupId, subId, filter, active]);
 
   /** Group chips + clickable path, shown at the top of levels 2 and 3. */
   const navBar = () => (
@@ -801,3 +804,5 @@ export default function WorkoutsTab({ dataVersion, shared, onSharedUsed }: Props
     );
   }
 }
+
+export default React.memo(WorkoutsTab);

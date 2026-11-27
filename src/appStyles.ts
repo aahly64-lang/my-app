@@ -62,6 +62,8 @@ export const makeAppStyles = (c: Palette) =>
       tabText: { fontSize: 11.5, fontWeight: '500', color: c.muted },
       tabTextActive: { color: c.onAccent, fontWeight: '700' },
       desk: { flex: 1 },
+      tabPane: { flex: 1 },
+      tabPaneHidden: { display: 'none' },
       deskContent: { padding: 16, paddingBottom: 56 },
       topActionBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
       sectionTitle: { fontSize: 21, fontWeight: '700', color: c.text, marginBottom: 10 },

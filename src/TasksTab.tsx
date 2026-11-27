@@ -85,6 +85,8 @@ interface Props {
   onConvertToNote: (t: Task) => void;
   openTaskId?: string | null; // from the global search: open this task's editor
   onOpenedTask?: () => void;
+  /** the tab is on screen (it stays mounted in the background after the first visit) */
+  active?: boolean;
 }
 
 async function scheduleTaskReminder(t: Task) {
@@ -103,7 +105,7 @@ async function scheduleTaskReminder(t: Task) {
   });
 }
 
-export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, openTaskId, onOpenedTask }: Props) {
+function TasksTab({ dataVersion, onCountChange, onConvertToNote, openTaskId, onOpenedTask, active = true }: Props) {
   const styles = useAppStyles();
   const c = useTheme();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -144,15 +146,27 @@ export default function TasksTab({ dataVersion, onCountChange, onConvertToNote, 
   useEffect(() => {
     (async () => {
       const cutoff = Date.now() - HISTORY_DAYS * 24 * 3600 * 1000;
-      const all = (await loadTasks()).filter((t) => !t.done || (t.doneAt ?? 0) > cutoff);
+      const loaded = await loadTasks();
+      const all = loaded.filter((t) => !t.done || (t.doneAt ?? 0) > cutoff);
       setTasks(all);
-      saveTasks(all);
+      if (all.length !== loaded.length) saveTasks(all); // write only when old done tasks were dropped
       setAreas(await loadAreas());
       setLists(await loadTaskLists());
       setTemplates(await loadTaskTemplates());
       setMorning(await loadMorning());
     })();
   }, [dataVersion]);
+
+  // Coming back to the tab: re-read the tasks only (the documents tab can attach a document to a task).
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current)
+      loadTasks().then((fresh) =>
+        // only when something changed, so the morning summary isn't re-scheduled for nothing
+        setTasks((cur) => (JSON.stringify(fresh) === JSON.stringify(cur) ? cur : fresh))
+      );
+    wasActive.current = active;
+  }, [active]);
 
   // Morning summary follows the tasks (debounced).
   const morningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1224,3 +1238,5 @@ function Stepper({ label, onMinus, onPlus }: { label: string; onMinus: () => voi
     </View>
   );
 }
+
+export default React.memo(TasksTab);

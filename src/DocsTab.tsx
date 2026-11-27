@@ -203,9 +203,11 @@ interface Props {
   /** files shared into the app from WhatsApp / mail…, waiting to be saved */
   incoming?: SharedFile[] | null;
   onIncomingDone?: () => void;
+  /** the tab is on screen (it stays mounted in the background after the first visit) */
+  active?: boolean;
 }
 
-export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone }: Props) {
+function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone, active = true }: Props) {
   const c = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [folders, setFolders] = useState<DocFolder[]>([]);
@@ -312,6 +314,21 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     setSelected(null);
     refresh();
   }, [refresh]);
+
+  // Coming back to the tab: pick up folders added from a task/note scan and changes made to the files
+  // outside the app – quietly, without a loading spinner.
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      loadDocFolders().then(setFolders);
+      loadDocRecent().then(setRecent);
+      if (current)
+        GeoAlarm.listDocuments(current.uri).then((list) => {
+          if (list) setEntries(list);
+        });
+    }
+    wasActive.current = active;
+  }, [active]);
 
   // Global search (home screen): all connected folders, including sub-folders.
   useEffect(() => {
@@ -2743,3 +2760,5 @@ const makeStyles = (c: Palette) => ({
     backgroundColor: c.subtle,
   },
 });
+
+export default React.memo(DocsTab);

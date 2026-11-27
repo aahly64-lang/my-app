@@ -148,6 +148,7 @@ import {
   saveThemeMode,
   saveTimer,
   wasSetupSeen,
+  type DocLink,
 } from './src/storage';
 
 type MainTab = 'notes' | 'tasks' | 'workouts' | 'alarms' | 'docs';
@@ -715,6 +716,25 @@ function AppInner({
   };
 
   // Task -> note (called by the tasks tab, which removes the task).
+  // Tabs visited so far – they stay mounted (hidden) so switching back is instant.
+  const visitedRef = useRef(new Set<MainTab>());
+  visitedRef.current.add(activeTab);
+  const visited = visitedRef.current;
+  // Stable props, so the hidden tabs don't re-draw on every change here (e.g. the timer ticking).
+  const onOpenedTask = useCallback(() => setOpenTaskId(null), []);
+  const onIncomingDone = useCallback(() => setIncomingFiles(null), []);
+  const onAttachToNote = useCallback(
+    (noteId: string, link: DocLink) =>
+      setNotes((prev) =>
+        prev.map((n) =>
+          n.id === noteId ? { ...n, docs: [...(n.docs ?? []).filter((d) => d.uri !== link.uri), link] } : n
+        )
+      ),
+    []
+  );
+  const notesKey = notes.map((n) => n.id + '\u0001' + n.title).join('\u0002');
+  const docNotes = useMemo(() => notes.map((n) => ({ id: n.id, title: n.title })), [notesKey]);
+
   const taskToNote = useCallback((t: Task) => {
     const item: StickyNote = {
       id: newId(),
@@ -1187,32 +1207,40 @@ function AppInner({
         ))}
       </View>
 
-      {activeTab === 'tasks' ? (
-        <TasksTab
-          dataVersion={dataVersion}
-          onCountChange={setTasksBadge}
-          onConvertToNote={taskToNote}
-          openTaskId={openTaskId}
-          onOpenedTask={() => setOpenTaskId(null)}
-        />
+      {/* A tab is built on its first visit and then stays ready in the background (hidden), so switching back is instant. */}
+      {visited.has('tasks') ? (
+        <View style={activeTab === 'tasks' ? styles.tabPane : styles.tabPaneHidden}>
+          <TasksTab
+            dataVersion={dataVersion}
+            onCountChange={setTasksBadge}
+            onConvertToNote={taskToNote}
+            openTaskId={openTaskId}
+            onOpenedTask={onOpenedTask}
+            active={activeTab === 'tasks'}
+          />
+        </View>
       ) : null}
-      {activeTab === 'workouts' ? (
-        <WorkoutsTab dataVersion={dataVersion} shared={shared} onSharedUsed={onSharedUsed} />
+      {visited.has('workouts') ? (
+        <View style={activeTab === 'workouts' ? styles.tabPane : styles.tabPaneHidden}>
+          <WorkoutsTab
+            dataVersion={dataVersion}
+            shared={shared}
+            onSharedUsed={onSharedUsed}
+            active={activeTab === 'workouts'}
+          />
+        </View>
       ) : null}
-      {activeTab === 'docs' ? (
-        <DocsTab
-          dataVersion={dataVersion}
-          notes={notes.map((n) => ({ id: n.id, title: n.title }))}
-          incoming={incomingFiles}
-          onIncomingDone={() => setIncomingFiles(null)}
-          onAttachToNote={(noteId, link) =>
-            setNotes((prev) =>
-              prev.map((n) =>
-                n.id === noteId ? { ...n, docs: [...(n.docs ?? []).filter((d) => d.uri !== link.uri), link] } : n
-              )
-            )
-          }
-        />
+      {visited.has('docs') ? (
+        <View style={activeTab === 'docs' ? styles.tabPane : styles.tabPaneHidden}>
+          <DocsTab
+            dataVersion={dataVersion}
+            notes={docNotes}
+            incoming={incomingFiles}
+            onIncomingDone={onIncomingDone}
+            onAttachToNote={onAttachToNote}
+            active={activeTab === 'docs'}
+          />
+        </View>
       ) : null}
 
       {activeTab === 'notes' || activeTab === 'alarms' ? (

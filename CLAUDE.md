@@ -19,6 +19,7 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - package: `com.avi.personalboard`. גרסה ב-`app.json`: `expo.version` + `android.versionCode` (להעלות את שניהם בכל גרסה).
 - מודול native משלנו: `modules/geo-alarm` (Kotlin, expo-modules). הנתיב `modules/geo-alarm/android` מסומן ב-.gitignore אבל הקבצים **במעקב** – שינויים עם `git add -u`; קובץ **חדש** שם צריך `git add -f <path>`.
 - נושא/צבעים: `ThemeContext` + `paletteFor(dark, accent)`, `useAppStyles()` ב-appStyles.ts.
+- טאבים ראשיים (משימות/כושר/מסמכים) נשארים mounted ומוסתרים אחרי הביקור הראשון; מקבלים `active`. לא להחזיר ל-mount מחדש בכל מעבר (איטי בטלפון חלש).
 - `PopupShell` (ui.tsx) – חלונית; גובה הגלילה מחושב בפיקסלים (אחוזים לא עובדים טוב באנדרואיד). יש `footer` לכפתורים קבועים.
 - מסכים מלאים (Modal) משתמשים ב-`useScreenFrame()` (ui.tsx): maxHeight = גובה החלון + רווח תחתון 140.
 - באג ידוע ב-RN 0.76: FlatList אופקי ב-RTL קורס ("ListMetricsAggregator") – להשתמש ב-ScrollView אופקי.
@@ -53,8 +54,9 @@ https://github.com/aahly64-lang/my-app/releases/latest/download/personal-board.a
 - SHA-1 של החתימה (debug.keystore סטנדרטי שחותם את ה-release): `5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25`
 - כניסה ל-Cloud Console דרך הדפדפן המובנה באפליקציית Claude במחשב; לפעמים גוגל מבקשת מאבי להזין סיסמה מחדש.
 
-## מצב נוכחי ומה פתוח (עדכון: 27/11/2026, גרסה 1.16.0)
+## מצב נוכחי ומה פתוח (עדכון: 27/11/2026, גרסה 1.16.1)
 ממתין לבדיקה של אבי על הטלפון:
+- 1.16.1 – מעבר בין טאבים מהיר יותר בטלפון חלש (טאבים נשארים מוכנים ברקע).
 - 1.16.0 – מסמכים שלב ד': זיהוי טקסט בטלפון (Tesseract) להצעת שם ותוקף, כרטיס דו-צדדי בעמוד אחד, שיתוף מכווץ, חתימה על מסמך.
 - 1.15.0 – מסמכים שלב ג': תצוגה מהירה, הערה, תגיות, תיק אישי, חידוש שנתי, מיון לפי גודל/סינון תאריך, כפולים, ארכיון.
 - 1.14.0 – מסמכים שלב ב': גיבוי הקבצים לדרייב, סל מחזור (30 יום, רוקן סל, מונה וגודל), מסמך נעול מוסתר (נעילה רק לפי בחירה), שיתוף PDF עם סיסמה.
