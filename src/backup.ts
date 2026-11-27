@@ -28,6 +28,7 @@ export interface BackupData {
   tasks: Task[];
   docFolders: DocFolder[];
   docMeta?: Record<string, DocMeta>;
+  personalHidden?: string[];
   sounds: SoundSettings;
   themeMode?: string;
   accent?: string;
@@ -90,6 +91,7 @@ export function parseBackup(raw: string): BackupData | null {
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
       docFolders: Array.isArray(parsed.docFolders) ? parsed.docFolders : [],
       docMeta: parsed.docMeta && typeof parsed.docMeta === 'object' ? parsed.docMeta : undefined,
+      personalHidden: Array.isArray(parsed.personalHidden) ? parsed.personalHidden : undefined,
       sounds: parsed.sounds && typeof parsed.sounds === 'object' ? parsed.sounds : {},
       themeMode: typeof parsed.themeMode === 'string' ? parsed.themeMode : undefined,
       accent: typeof parsed.accent === 'string' ? parsed.accent : undefined,

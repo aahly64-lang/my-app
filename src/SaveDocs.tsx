@@ -261,7 +261,7 @@ type SaveDocs = ReturnType<typeof useSaveDocs>;
  * Scan with Google's scanner, then ask for a name and a folder.
  * Returns the saved document, or null (cancelled / no folder / scanner not available).
  */
-export async function scanAndSave(s: SaveDocs, folder?: DocFolder): Promise<DocLink | null> {
+export async function scanAndSave(s: SaveDocs, folder?: DocFolder, name?: string): Promise<DocLink | null> {
   const quality = await loadScanQuality();
   let r: { uri: string; pages: number } | null = null;
   try {
@@ -273,7 +273,7 @@ export async function scanAndSave(s: SaveDocs, folder?: DocFolder): Promise<DocL
   if (!r) return null;
   const saved = await s.ask({
     title: '📷 שמירת הסריקה',
-    files: [{ src: r.uri, name: scanName() + '.pdf', mime: 'application/pdf' }],
+    files: [{ src: r.uri, name: (name || scanName()) + '.pdf', mime: 'application/pdf' }],
     folder,
   });
   return saved?.[0] ?? null;

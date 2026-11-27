@@ -69,6 +69,7 @@ async function gatherBackup(): Promise<BackupData> {
     alarms: await loadAlarmClocks(),
     docFolders: await loadDocFolders(),
     docMeta: await loadDocMeta(),
+    personalHidden: await loadPersonalHidden(),
     sounds: await loadSounds(),
     themeMode: await loadThemeMode(),
     accent: await loadAccent(),
@@ -119,6 +120,8 @@ import {
   loadDocFolders,
   loadDocMeta,
   saveDocMeta,
+  loadPersonalHidden,
+  savePersonalHidden,
   loadGroups,
   loadSounds,
   loadTasks,
@@ -1088,6 +1091,7 @@ function AppInner({
         await saveTasks(data.tasks);
         await saveDocFolders(data.docFolders);
         if (data.docMeta) await saveDocMeta(data.docMeta);
+        if (data.personalHidden) await savePersonalHidden(data.personalHidden);
         await saveSounds(data.sounds);
         if (data.themeMode) setThemeMode(data.themeMode as ThemeMode);
         if (data.accent) setAccent(data.accent);

@@ -47,6 +47,13 @@ export interface DocEntry {
   treeUri?: string;
 }
 
+/** A rendered preview picture (cached JPEG). */
+export interface PreviewPic {
+  uri: string;
+  width: number;
+  height: number;
+}
+
 type GeoAlarmNative = {
   triggerAlarm(title: string, body: string, kind: string, sound: string | null, durationMs: number): void;
   scheduleRing(json: string): void;
@@ -61,6 +68,10 @@ type GeoAlarmNative = {
   releaseFolder(uri: string): void;
   searchDocuments(roots: string[], query: string, limit: number): Promise<DocEntry[]>;
   documentThumbnail(uri: string, mime: string, size: number, stamp: number): Promise<string | null>;
+  pdfPageCount(uri: string): Promise<number>;
+  renderPdfPage(uri: string, page: number, width: number, stamp: number): Promise<PreviewPic | null>;
+  previewImage(uri: string, maxPx: number, stamp: number): Promise<PreviewPic | null>;
+  findDuplicates(roots: string[]): Promise<DocEntry[][]>;
   renameDocument(uri: string, name: string): string | null;
   deleteDocument(uri: string): boolean;
   shareDocuments(uris: string[], mimes: string[]): boolean;
@@ -151,6 +162,35 @@ export const GeoAlarm = {
   documentThumbnail: async (uri: string, mime: string, size: number, stamp: number): Promise<string | null> => {
     try {
       return native ? await native.documentThumbnail(uri, mime, size, stamp) : null;
+    } catch {
+      return null;
+    }
+  },
+  /** -1 = can't open (password protected / broken) */
+  pdfPageCount: async (uri: string): Promise<number> => {
+    try {
+      return native ? await native.pdfPageCount(uri) : -1;
+    } catch {
+      return -1;
+    }
+  },
+  renderPdfPage: async (uri: string, page: number, width: number, stamp: number): Promise<PreviewPic | null> => {
+    try {
+      return native ? await native.renderPdfPage(uri, page, Math.round(width), stamp) : null;
+    } catch {
+      return null;
+    }
+  },
+  previewImage: async (uri: string, maxPx: number, stamp: number): Promise<PreviewPic | null> => {
+    try {
+      return native ? await native.previewImage(uri, Math.round(maxPx), stamp) : null;
+    } catch {
+      return null;
+    }
+  },
+  findDuplicates: async (roots: string[]): Promise<DocEntry[][] | null> => {
+    try {
+      return native ? await native.findDuplicates(roots) : [];
     } catch {
       return null;
     }

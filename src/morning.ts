@@ -35,7 +35,7 @@ export async function scheduleMorning(tasks: Task[], cfg: { enabled: boolean; ti
     showBadge: false,
   }).catch(() => {});
   const meta = await loadDocMeta().catch(() => ({} as Record<string, DocMeta>));
-  const docs = Object.values(meta).filter((d) => !!d.expiry);
+  const docs = Object.values(meta).filter((d) => !!d.expiry && !d.archived);
   const [h, m] = cfg.time.split(':').map(Number);
   const now = new Date();
   for (let i = 0; i < 7; i++) {

@@ -37,6 +37,8 @@ import { canLock, ensureUnlocked } from './lock';
 import { cancelRing, scheduleReminder } from './rings';
 import { refreshMorning } from './morning';
 import { PendingFile, scanAndSave, scanName, useSaveDocs } from './SaveDocs';
+import DocPreview from './DocPreview';
+import { DATE_FILTERS, DateFilter, PERSONAL_SLOTS, PersonalSlot, addYear, allTags, passesDate, slotOf } from './docInfo';
 import {
   DocFolder,
   DocLink,
@@ -47,6 +49,9 @@ import {
   loadDocMeta,
   loadDocRecent,
   loadDocView,
+  loadPersonalHidden,
+  metaEmpty,
+  savePersonalHidden,
   loadScanQuality,
   loadDocOrder,
   saveDocOrder,
@@ -97,6 +102,9 @@ function passes(f: TypeFilter, mime: string, isDir: boolean) {
   return typeOf(mime) === f;
 }
 
+/** PDFs and pictures open in the app's own quick preview; other files in another app. */
+const canPreview = (mime: string) => mime.includes('pdf') || mime.startsWith('image/');
+
 function sizeText(n: number): string {
   if (!n) return '';
   if (n < 1024) return `${n} B`;
@@ -140,12 +148,12 @@ function expiryText(ymd: string) {
 async function scheduleExpiry(uri: string, meta: DocMeta) {
   const id = docRingId(uri);
   cancelRing(id);
-  if (!meta.expiry || !meta.remindDays) return false;
+  if (!meta.expiry || !meta.remindDays || meta.archived) return false;
   const [y, m, d] = meta.expiry.split('-').map(Number);
   const at = new Date(y, m - 1, d - meta.remindDays, 9, 0, 0).getTime();
   return scheduleReminder({
     id,
-    title: `⏰ תוקף מסמך: ${meta.name}`,
+    title: meta.renewYearly ? `🔁 חידוש שנתי: ${meta.name}` : `⏰ תוקף מסמך: ${meta.name}`,
     body: `התוקף מסתיים ב-${displayYMD(meta.expiry)} (בעוד ${meta.remindDays} ימים)`,
     silent: false,
     once: { at },
@@ -206,14 +214,26 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<DocEntry[] | null>(null);
   const [searching, setSearching] = useState(false);
-  const [sortBy, setSortBy] = useState<'name' | 'date' | 'manual'>('name');
+  const [sortBy, setSortBy] = useState<'name' | 'date' | 'size' | 'manual'>('name');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  // documents stage C
+  const [preview, setPreview] = useState<DocEntry | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [listView, setListView] = useState<{ kind: 'archive' } | { kind: 'tag'; tag: string } | null>(null);
+  const [personalOpen, setPersonalOpen] = useState(false);
+  const [personalHidden, setPersonalHidden] = useState<string[]>([]);
+  const [dupes, setDupes] = useState<DocEntry[][] | null>(null);
+  const [noteText, setNoteText] = useState('');
+  const [newTag, setNewTag] = useState('');
   const [order, setOrder] = useState<Record<string, string[]>>({});
   const [filter, setFilter] = useState<TypeFilter>('all');
   const [view, setView] = useState<'list' | 'grid'>('list');
   const [meta, setMeta] = useState<Record<string, DocMeta>>({});
   const [recent, setRecent] = useState<RecentDoc[]>([]);
   const [menu, setMenu] = useState<DocEntry | null>(null);
-  const [panel, setPanel] = useState<'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages' | 'protect'>('menu');
+  const [panel, setPanel] = useState<
+    'menu' | 'rename' | 'expiry' | 'link' | 'rotate' | 'pages' | 'protect' | 'note' | 'tags' | 'personal'
+  >('menu');
   const [password, setPassword] = useState('');
   // recycle bin
   const [trash, setTrash] = useState<TrashItem[]>([]);
@@ -251,6 +271,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     loadScanQuality().then(setQuality);
     loadDocOrder().then(setOrder);
     purgeTrash().then(setTrash);
+    loadPersonalHidden().then(setPersonalHidden);
     setPath([]);
   }, [dataVersion]);
 
@@ -262,7 +283,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     return () => sub.remove();
   }, []);
 
-  const hidden = (uri: string) => !showLocked && !!meta[uri]?.locked;
+  const hidden = (uri: string) => (!showLocked && !!meta[uri]?.locked) || (!showArchived && !!meta[uri]?.archived);
   const revealLocked = async () => {
     if (await ensureUnlocked('הצגת מסמכים נעולים')) setShowLocked(true);
   };
@@ -312,13 +333,22 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     }, 450);
   }, [search, current, folders]);
 
-  const updateMeta = async (uri: string, patch: Partial<DocMeta> | null, base?: { name: string; mime: string }) => {
-    const next = { ...meta };
-    if (patch === null) delete next[uri];
-    else next[uri] = { ...(next[uri] ?? { name: base?.name ?? '', mime: base?.mime ?? '' }), ...patch };
+  // the latest meta, so that quick changes in a row (tags…) don't overwrite each other
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
+  const updateMeta = async (uri: string, patch: Partial<DocMeta> | null, base?: { name: string; mime: string; size?: number }) => {
+    const next = { ...metaRef.current };
+    let out: DocMeta | undefined;
+    if (patch !== null) {
+      out = { ...(next[uri] ?? { name: base?.name ?? '', mime: base?.mime ?? '' }), ...patch };
+      if (base?.size) out.size = base.size;
+    }
+    if (!out || metaEmpty(out)) delete next[uri];
+    else next[uri] = out;
+    metaRef.current = next;
     setMeta(next);
     await saveDocMeta(next);
-    return next[uri];
+    return out;
   };
 
   const rememberOpen = async (e: DocEntry) => {
@@ -340,6 +370,15 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       return;
     }
     if (meta[e.uri]?.locked && !(await ensureUnlocked('פתיחת מסמך נעול'))) return;
+    if (canPreview(e.mime)) {
+      setPreview(e);
+      rememberOpen(e);
+      return;
+    }
+    openExternal(e);
+  };
+
+  const openExternal = (e: DocEntry) => {
     if (!GeoAlarm.openDocument(e.uri, e.mime)) {
       Alert.alert('לא ניתן לפתוח', 'הקובץ לא נמצא (אולי הוזז או נמחק), או שאין אפליקציה שפותחת אותו.');
       return;
@@ -532,16 +571,14 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
 
   const toggleFav = async (e: DocEntry) => {
     const fav = !meta[e.uri]?.fav;
-    const m = await updateMeta(e.uri, { fav, name: e.name, mime: e.mime }, e);
-    if (m && !m.fav && !m.expiry && !m.locked) await updateMeta(e.uri, null);
+    await updateMeta(e.uri, { fav, name: e.name, mime: e.mime }, e);
   };
 
   const toggleLock = async (e: DocEntry) => {
     const locked = !!meta[e.uri]?.locked;
     if (locked) {
       if (!(await ensureUnlocked('ביטול נעילת מסמך'))) return;
-      const m = await updateMeta(e.uri, { locked: false }, e);
-      if (m && !m.fav && !m.expiry) await updateMeta(e.uri, null);
+      await updateMeta(e.uri, { locked: false }, e);
     } else {
       if (!(await canLock())) return;
       await updateMeta(e.uri, { locked: true, name: e.name, mime: e.mime }, e);
@@ -573,6 +610,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     setRecent(rec);
     await saveDocRecent(rec);
     closeMenu();
+    if (preview?.uri === menu.uri) setPreview({ ...preview, uri: newUri, name });
     refresh();
     if (results) setResults(results.map((r) => (r.uri === menu.uri ? { ...r, uri: newUri, name } : r)));
   };
@@ -749,6 +787,8 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     await forget(gone);
     const t = await loadTrash();
     setTrash(t);
+    if (preview && gone.includes(preview.uri)) setPreview(null);
+    if (dupes) setDupes(dupes.map((g) => g.filter((x) => !gone.includes(x.uri))).filter((g) => g.length > 1));
     if (failed) Alert.alert('מחיקה', `${failed} קבצים לא נמחקו. ייתכן שאין הרשאת כתיבה לתיקייה.`);
     if (noCopy.length)
       confirm(
@@ -853,9 +893,116 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
 
   const clearExpiry = async (e: DocEntry) => {
     cancelRing(docRingId(e.uri));
-    const m = await updateMeta(e.uri, { expiry: undefined, remindDays: undefined }, e);
-    if (m && !m.fav && !m.locked) await updateMeta(e.uri, null);
+    await updateMeta(e.uri, { expiry: undefined, remindDays: undefined, renewYearly: undefined }, e);
     refreshMorning();
+  };
+
+  // ---------- documents stage C: note, tags, archive, personal file, yearly renewal, duplicates ----------
+  const saveNote = async (e: DocEntry) => {
+    await updateMeta(e.uri, { note: noteText.trim() || undefined, name: e.name, mime: e.mime }, e);
+    setPanel('menu');
+  };
+
+  const toggleTag = async (e: DocEntry, tag: string) => {
+    const cur = metaRef.current[e.uri]?.tags ?? [];
+    const tags = cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag];
+    await updateMeta(e.uri, { tags: tags.length ? tags : undefined, name: e.name, mime: e.mime }, e);
+  };
+  const addTag = async (e: DocEntry) => {
+    const t = newTag.trim().replace(/^#/, '').slice(0, 24);
+    if (!t) return;
+    setNewTag('');
+    if (!(metaRef.current[e.uri]?.tags ?? []).includes(t)) await toggleTag(e, t);
+  };
+
+  const toggleArchive = async (e: DocEntry) => {
+    const archived = !meta[e.uri]?.archived;
+    const m = await updateMeta(e.uri, { archived: archived || undefined, name: e.name, mime: e.mime }, e);
+    if (archived) cancelRing(docRingId(e.uri));
+    else if (m?.expiry) await scheduleExpiry(e.uri, m);
+    refreshMorning();
+    closeMenu();
+    if (archived) {
+      if (preview?.uri === e.uri) setPreview(null);
+      if (!showArchived)
+        Alert.alert('🗄️ הועבר לארכיון', 'הקובץ נשאר במקומו, אבל לא יופיע ברשימות ולא יזכיר תוקף. אפשר למצוא אותו ב"ארכיון" במסך הראשי של המסמכים.');
+    }
+  };
+
+  const toggleRenew = async (e: DocEntry) => {
+    const m = await updateMeta(e.uri, { renewYearly: !meta[e.uri]?.renewYearly || undefined }, e);
+    if (m?.expiry) await scheduleExpiry(e.uri, m);
+  };
+  /** "I renewed it": the expiry moves on by a year (or more, until it is in the future). */
+  const renewNow = async (e: DocEntry) => {
+    const old = meta[e.uri]?.expiry;
+    if (!old) return;
+    let next = addYear(old);
+    while (daysUntil(next) < 0) next = addYear(next);
+    const m = await updateMeta(e.uri, { expiry: next }, e);
+    if (m) await scheduleExpiry(e.uri, m);
+    refreshMorning();
+    Alert.alert('🔁 חודש ✓', `התוקף עודכן ל-${displayYMD(next)}. כדאי גם לסרוק את המסמך החדש ("➕ הוסף עמודים" או סריקה חדשה).`);
+  };
+
+  const assignSlot = async (e: { uri: string; name: string; mime: string; size?: number }, key: string | null) => {
+    const next = { ...metaRef.current };
+    if (key)
+      for (const [u, x] of Object.entries(next))
+        if (x.personal === key && u !== e.uri) {
+          const y = { ...x, personal: undefined };
+          if (metaEmpty(y)) delete next[u];
+          else next[u] = y;
+        }
+    metaRef.current = next;
+    const slot = slotOf(key ?? undefined);
+    const cur = next[e.uri];
+    await updateMeta(
+      e.uri,
+      {
+        personal: key ?? undefined,
+        name: e.name,
+        mime: e.mime,
+        ...(slot?.yearly && cur?.renewYearly === undefined ? { renewYearly: true } : {}),
+      },
+      e
+    );
+  };
+
+  const scanToSlot = async (slot: PersonalSlot) => {
+    const d = await scanAndSave(saver, current, slot.label);
+    if (!d) return;
+    await assignSlot(d, slot.key);
+    afterSaved([d], 'המסמך');
+  };
+
+  const toggleSlotHidden = (key: string) => {
+    const next = personalHidden.includes(key) ? personalHidden.filter((k) => k !== key) : [...personalHidden, key];
+    setPersonalHidden(next);
+    savePersonalHidden(next);
+  };
+
+  const findDupes = async () => {
+    if (!folders.length) {
+      Alert.alert('קבצים כפולים', 'קודם צריך לחבר תיקייה.');
+      return;
+    }
+    const g = await saver.busy('⏳ מחפש קבצים כפולים בכל התיקיות…', () => GeoAlarm.findDuplicates(folders.map((f) => f.uri)));
+    if (g === null) {
+      Alert.alert('קבצים כפולים', 'החיפוש נכשל.');
+      return;
+    }
+    // keep first: the copy with a star / tag / note…, otherwise the oldest
+    setDupes(g.map((grp) => [...grp].sort((a, b) => Number(!!meta[b.uri]) - Number(!!meta[a.uri]))));
+  };
+  const dupeKeepFirst = (g: DocEntry[]) => {
+    const extra = g.slice(1);
+    confirm(
+      'מחיקת כפולים',
+      `להשאיר את "${g[0].name}" (📂 ${g[0].folder ?? ''}) ולהעביר ${extra.length === 1 ? 'עותק אחד' : `${extra.length} עותקים`} לסל המחזור?`,
+      'מחק עותקים',
+      () => trashDocs(extra)
+    );
   };
 
   const linkToTask = async (e: DocEntry, taskId: string | null) => {
@@ -947,14 +1094,58 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
   };
 
   // ---------- data for the lists ----------
+  const metaText = (uri: string) => {
+    const m = meta[uri];
+    return m ? `${m.note ?? ''} ${(m.tags ?? []).join(' ')}`.toLowerCase() : '';
+  };
+  const metaEntry = (uri: string, m: DocMeta): DocEntry => ({ uri, name: m.name, mime: m.mime, isDir: false, size: m.size ?? 0, modified: 0 });
+
+  const archived = useMemo(
+    () =>
+      Object.entries(meta)
+        .filter(([, m]) => m.archived && (showLocked || !m.locked))
+        .sort((a, b) => a[1].name.localeCompare(b[1].name, 'he'))
+        .map(([uri, m]) => metaEntry(uri, m)),
+    [meta, showLocked]
+  );
+  const tagList = useMemo(() => allTags(meta).filter((t) => t.count > 0), [meta]);
+  const listItems = useMemo(() => {
+    if (!listView) return [];
+    if (listView.kind === 'archive') return archived;
+    return Object.entries(meta)
+      .filter(([, m]) => (m.tags ?? []).includes(listView.tag) && (showLocked || !m.locked) && (showArchived || !m.archived))
+      .sort((a, b) => a[1].name.localeCompare(b[1].name, 'he'))
+      .map(([uri, m]) => metaEntry(uri, m));
+  }, [listView, meta, archived, showLocked, showArchived]);
+  const personalState = useMemo(() => {
+    const bySlot = new Map<string, [string, DocMeta]>();
+    Object.entries(meta).forEach(([u, m]) => m.personal && bySlot.set(m.personal, [u, m]));
+    let missing = 0;
+    let bad = 0;
+    let ok = 0;
+    for (const slot of PERSONAL_SLOTS) {
+      if (personalHidden.includes(slot.key)) continue;
+      const d = bySlot.get(slot.key);
+      if (!d) missing++;
+      else if (d[1].expiry && daysUntil(d[1].expiry) <= 30) bad++;
+      else ok++;
+    }
+    return { bySlot, missing, bad, ok };
+  }, [meta, personalHidden]);
   const shownEntries = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = entries.filter(
-      (e) => !e.name.startsWith('.') && !hidden(e.uri) && (!q || e.name.toLowerCase().includes(q)) && passes(filter, e.mime, e.isDir)
+      (e) =>
+        !e.name.startsWith('.') &&
+        !hidden(e.uri) &&
+        (!q || e.name.toLowerCase().includes(q) || metaText(e.uri).includes(q)) &&
+        passes(filter, e.mime, e.isDir) &&
+        (e.isDir ? dateFilter === 'all' : passesDate(dateFilter, e.modified))
     );
     return list.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       if (sortBy === 'date') return b.modified - a.modified;
+      if (sortBy === 'size') return b.size - a.size;
       if (sortBy === 'manual' && current) {
         const o = order[current.uri] ?? [];
         const ia = o.indexOf(a.name);
@@ -963,26 +1154,34 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       }
       return a.name.localeCompare(b.name, 'he');
     });
-  }, [entries, search, sortBy, filter, order, current, meta, showLocked]);
+  }, [entries, search, sortBy, filter, order, current, meta, showLocked, showArchived, dateFilter]);
 
-  const shownResults = useMemo(
-    () => (results ?? []).filter((e) => !hidden(e.uri) && passes(filter, e.mime, e.isDir)),
-    [results, filter, meta, showLocked]
-  );
+  /** Home search: file names (in the folders) + the notes and tags the user wrote. */
+  const shownResults = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = [...(results ?? [])];
+    if (q.length >= 2) {
+      const have = new Set(list.map((e) => e.uri));
+      for (const [uri, m] of Object.entries(meta))
+        if (!have.has(uri) && (m.name.toLowerCase().includes(q) || metaText(uri).includes(q)))
+          list.push({ uri, name: m.name, mime: m.mime, isDir: false, size: m.size ?? 0, modified: 0 });
+    }
+    return list.filter((e) => !hidden(e.uri) && passes(filter, e.mime, e.isDir) && passesDate(dateFilter, e.modified));
+  }, [results, filter, meta, showLocked, showArchived, dateFilter, search]);
 
   const favs = useMemo(
     () =>
       Object.entries(meta)
-        .filter(([, m]) => m.fav && (showLocked || !m.locked) && passes(filter, m.mime, false))
-        .map(([uri, m]) => ({ uri, name: m.name, mime: m.mime, isDir: false, size: 0, modified: 0 } as DocEntry)),
+        .filter(([, m]) => m.fav && !m.archived && (showLocked || !m.locked) && passes(filter, m.mime, false))
+        .map(([uri, m]) => metaEntry(uri, m)),
     [meta, filter, showLocked]
   );
   const expiring = useMemo(
     () =>
       Object.entries(meta)
-        .filter(([, m]) => m.expiry && (showLocked || !m.locked) && daysUntil(m.expiry) <= 60)
+        .filter(([, m]) => m.expiry && !m.archived && (showLocked || !m.locked) && daysUntil(m.expiry) <= 60)
         .sort((a, b) => (a[1].expiry! < b[1].expiry! ? -1 : 1))
-        .map(([uri, m]) => ({ uri, name: m.name, mime: m.mime, isDir: false, size: 0, modified: 0 } as DocEntry)),
+        .map(([uri, m]) => metaEntry(uri, m)),
     [meta, showLocked]
   );
   const recentShown = useMemo(
@@ -1010,12 +1209,32 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     const m = meta[e.uri];
     if (!m) return null;
     const ex = m.expiry ? expiryText(m.expiry) : null;
+    const renewDue = m.renewYearly && m.expiry && daysUntil(m.expiry) < 0;
+    const slot = slotOf(m.personal);
     return (
-      <View style={styles.badgeRow}>
-        {m.fav ? <Text style={styles.favMark}>⭐</Text> : null}
-        {m.locked ? <Text style={styles.favMark}>🔒</Text> : null}
-        {ex ? <Text style={[styles.expiryBadge, ex.bad && styles.expiryBad]}>⏰ {ex.text}</Text> : null}
-      </View>
+      <>
+        <View style={styles.badgeRow}>
+          {m.fav ? <Text style={styles.favMark}>⭐</Text> : null}
+          {m.locked ? <Text style={styles.favMark}>🔒</Text> : null}
+          {m.archived ? <Text style={styles.tagBadge}>🗄️ בארכיון</Text> : null}
+          {slot ? <Text style={styles.tagBadge}>🗂️ {slot.label}</Text> : null}
+          {ex ? (
+            <Text style={[styles.expiryBadge, ex.bad && styles.expiryBad]}>
+              {renewDue ? '🔁 הגיע זמן החידוש' : `${m.renewYearly ? '🔁' : '⏰'} ${ex.text}`}
+            </Text>
+          ) : null}
+          {(m.tags ?? []).map((t) => (
+            <Text key={t} style={styles.tagBadge}>
+              🏷️ {t}
+            </Text>
+          ))}
+        </View>
+        {m.note ? (
+          <Text style={styles.noteLine} numberOfLines={1}>
+            📝 {m.note}
+          </Text>
+        ) : null}
+      </>
     );
   };
 
@@ -1159,12 +1378,54 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     <PopupShell visible={!!menu} title={menu?.name ?? ''} onClose={closeMenu} yellow={false}>
       {menu && panel === 'menu' ? (
         <>
-          <MenuItem styles={styles} label="📂  פתח" onPress={() => { const e = menu; closeMenu(); openEntry(e); }} />
+          {canPreview(menu.mime) ? (
+            <>
+              {preview?.uri !== menu.uri ? (
+                <MenuItem styles={styles} label="👁️  הצג" onPress={() => { const e = menu; closeMenu(); openEntry(e); }} />
+              ) : null}
+              <MenuItem
+                styles={styles}
+                label="↗️  פתח באפליקציה אחרת"
+                onPress={async () => {
+                  const e = menu;
+                  if (m?.locked && !(await ensureUnlocked('פתיחת מסמך נעול'))) return;
+                  closeMenu();
+                  openExternal(e);
+                }}
+              />
+            </>
+          ) : (
+            <MenuItem styles={styles} label="📂  פתח" onPress={() => { const e = menu; closeMenu(); openEntry(e); }} />
+          )}
           <MenuItem styles={styles} label={m?.fav ? '☆  הסר ממועדפים' : '⭐  הוסף למועדפים'} onPress={() => toggleFav(menu)} />
           <MenuItem
             styles={styles}
             label={m?.expiry ? `⏰  תוקף: ${displayYMD(m.expiry)}` : '⏰  קבע תוקף ותזכורת'}
             onPress={() => setPanel('expiry')}
+          />
+          {m?.renewYearly && m.expiry && daysUntil(m.expiry) <= 30 ? (
+            <MenuItem styles={styles} label={`🔁  חידשתי – העבר ל-${displayYMD(addYear(m.expiry))}`} onPress={() => renewNow(menu)} />
+          ) : null}
+          <MenuItem
+            styles={styles}
+            label={m?.note ? '📝  ערוך הערה' : '📝  הוסף הערה'}
+            onPress={() => {
+              setNoteText(m?.note ?? '');
+              setPanel('note');
+            }}
+          />
+          <MenuItem
+            styles={styles}
+            label={m?.tags?.length ? `🏷️  תגיות: ${m.tags.join(', ')}` : '🏷️  תגיות'}
+            onPress={() => {
+              setNewTag('');
+              setPanel('tags');
+            }}
+          />
+          <MenuItem
+            styles={styles}
+            label={slotOf(m?.personal) ? `🗂️  בתיק האישי: ${slotOf(m?.personal)!.label}` : '🗂️  הוסף לתיק האישי'}
+            onPress={() => setPanel('personal')}
           />
           <MenuItem styles={styles} label="🔗  צרף למשימה או לפתק" onPress={() => setPanel('link')} />
           <MenuItem
@@ -1209,7 +1470,80 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
           {menu.mime === 'application/pdf' ? (
             <MenuItem styles={styles} label="🔄  סובב עמודים" onPress={() => setPanel('rotate')} />
           ) : null}
+          <MenuItem styles={styles} label={m?.archived ? '📤  הוצא מהארכיון' : '🗄️  העבר לארכיון'} onPress={() => toggleArchive(menu)} />
           <MenuItem styles={styles} label="🗑️  מחיקה" danger onPress={() => doDelete(menu)} />
+        </>
+      ) : null}
+
+      {menu && panel === 'note' ? (
+        <>
+          <Text style={styles.hint}>הערה חופשית למסמך (למשל מספר פוליסה, טלפון של הסוכן, איפה המקור). אפשר לחפש לפי ההערה.</Text>
+          <TextInput
+            style={[styles.input, styles.noteInput]}
+            value={noteText}
+            onChangeText={setNoteText}
+            placeholder="כתוב הערה…"
+            placeholderTextColor={c.muted}
+            multiline
+            autoFocus
+            textAlignVertical="top"
+          />
+          <TouchableOpacity style={styles.bigBtn} onPress={() => saveNote(menu)}>
+            <Text style={styles.bigBtnText}>שמור</Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
+
+      {menu && panel === 'tags' ? (
+        <>
+          <Text style={styles.hint}>לחץ על תגית כדי לסמן או להסיר. במסך הראשי של המסמכים אפשר לראות את כל המסמכים של תגית.</Text>
+          <View style={styles.chipsWrap}>
+            {allTags(meta).map(({ tag }) => {
+              const on = (m?.tags ?? []).includes(tag);
+              return (
+                <TouchableOpacity key={tag} style={[styles.chip, on && styles.chipOn]} onPress={() => toggleTag(menu, tag)}>
+                  <Text style={[styles.chipText, on && styles.chipTextOn]}>{on ? '✓ ' : ''}{tag}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={styles.tagAddRow}>
+            <TextInput
+              style={[styles.input, styles.flex1]}
+              value={newTag}
+              onChangeText={setNewTag}
+              placeholder="תגית חדשה"
+              placeholderTextColor={c.muted}
+              onSubmitEditing={() => addTag(menu)}
+            />
+            <TouchableOpacity style={styles.tagAddBtn} onPress={() => addTag(menu)}>
+              <Text style={styles.bigBtnText}>הוסף</Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity style={styles.bigBtn} onPress={() => setPanel('menu')}>
+            <Text style={styles.bigBtnText}>סיום</Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
+
+      {menu && panel === 'personal' ? (
+        <>
+          <Text style={styles.hint}>איזה מסמך זה? הוא יופיע ב"תיק האישי" ותוכל לראות שם מה חסר ומה פג תוקף.</Text>
+          {PERSONAL_SLOTS.map((slot) => {
+            const on = m?.personal === slot.key;
+            const other = !on ? personalState.bySlot.get(slot.key) : undefined;
+            return (
+              <MenuItem
+                key={slot.key}
+                styles={styles}
+                label={`${on ? '●' : '○'}  ${slot.icon} ${slot.label}${other ? '  (יחליף את הקיים)' : ''}`}
+                onPress={async () => {
+                  await assignSlot(menu, on ? null : slot.key);
+                  setPanel('menu');
+                }}
+              />
+            );
+          })}
         </>
       ) : null}
 
@@ -1303,6 +1637,19 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
                 ))}
               </View>
               <Text style={styles.hint}>התזכורת תצלצל ב-9:00 בבוקר.</Text>
+              <MenuItem
+                styles={styles}
+                label={`${m.renewYearly ? '☑' : '☐'}  🔁 מסמך שמתחדש כל שנה (רישיון רכב, ביטוח…)`}
+                onPress={() => toggleRenew(menu)}
+              />
+              {m.renewYearly ? (
+                <>
+                  <Text style={styles.hint}>
+                    כשתחדש, לחץ "חידשתי" והתוקף והתזכורת יעברו לשנה הבאה ({displayYMD(addYear(m.expiry))}).
+                  </Text>
+                  <MenuItem styles={styles} label="🔁  חידשתי – העבר לשנה הבאה" onPress={() => renewNow(menu)} />
+                </>
+              ) : null}
               <MenuItem styles={styles} label="🗑️  הסר תוקף" danger onPress={() => clearExpiry(menu)} />
             </>
           ) : null}
@@ -1512,6 +1859,199 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
     </PopupShell>
   );
 
+  // ---------- documents stage C popups ----------
+  const previewEl = (
+    <DocPreview
+      entry={preview}
+      meta={preview ? meta[preview.uri] : undefined}
+      onClose={() => setPreview(null)}
+      onOpenExternal={openExternal}
+      onShare={(e) => GeoAlarm.shareDocument(e.uri, e.mime)}
+      onMenu={openMenu}
+    />
+  );
+
+  const listPopup = (
+    <PopupShell
+      visible={!!listView}
+      title={listView?.kind === 'archive' ? `🗄️ ארכיון · ${listItems.length}` : `🏷️ ${listView?.kind === 'tag' ? listView.tag : ''} · ${listItems.length}`}
+      onClose={() => setListView(null)}
+      yellow={false}
+    >
+      {listView?.kind === 'archive' ? (
+        <Text style={styles.popupHint}>
+          מסמכים ישנים שלא צריך לראות כל יום. הקבצים נשארים במקומם, רק מוסתרים מהרשימות ובלי תזכורות תוקף. ⋮ ← "הוצא מהארכיון" כדי להחזיר.
+        </Text>
+      ) : null}
+      {listItems.length === 0 ? <Text style={styles.empty}>אין כאן מסמכים.</Text> : null}
+      <View>{listItems.map(row)}</View>
+    </PopupShell>
+  );
+
+  const personalPopup = (
+    <PopupShell visible={personalOpen} title="🗂️ תיק אישי" onClose={() => setPersonalOpen(false)} yellow={false}>
+      <Text style={styles.popupHint}>
+        המסמכים החשובים במקום אחד. מסמך שכבר שמור: ⋮ ליד המסמך ← "הוסף לתיק האישי". מסמך חדש: "📷 סרוק".
+      </Text>
+      {PERSONAL_SLOTS.filter((sl) => !personalHidden.includes(sl.key)).map((slot) => {
+        const d = personalState.bySlot.get(slot.key);
+        const dm = d?.[1];
+        const secret = !!dm?.locked && !showLocked;
+        const ex = dm?.expiry ? expiryText(dm.expiry) : null;
+        const renewDue = dm?.renewYearly && dm.expiry && daysUntil(dm.expiry) < 0;
+        return (
+          <View key={slot.key} style={[styles.slot, !d && styles.slotMissing, ex?.bad && styles.slotBad]}>
+            <View style={styles.slotHead}>
+              <Text style={styles.slotIcon}>{slot.icon}</Text>
+              <View style={styles.flex1}>
+                <Text style={styles.rowTitle}>{slot.label}</Text>
+                {!d ? (
+                  <Text style={[styles.rowSub, styles.danger]}>❌ חסר</Text>
+                ) : (
+                  <>
+                    <Text style={styles.rowSub} numberOfLines={1}>
+                      ✅ {secret ? '🔒 מסמך נעול' : dm!.name}
+                    </Text>
+                    {ex ? (
+                      <Text style={[styles.rowSub, ex.bad && styles.danger]}>
+                        {renewDue ? '🔁 הגיע זמן החידוש' : `${dm!.renewYearly ? '🔁' : '⏰'} ${ex.text}`}
+                      </Text>
+                    ) : slot.expires ? (
+                      <Text style={styles.rowSub}>⏰ לא הוגדר תוקף (⋮ ← קבע תוקף)</Text>
+                    ) : null}
+                  </>
+                )}
+              </View>
+              {d ? (
+                <TouchableOpacity onPress={() => openMenu(metaEntry(d[0], d[1]))} hitSlop={12} style={styles.moreBtn}>
+                  <Text style={styles.moreText}>⋮</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <View style={styles.trashBtns}>
+              {d ? (
+                <TouchableOpacity style={styles.trashBtn} onPress={() => openEntry(metaEntry(d[0], d[1]))}>
+                  <Text style={styles.actionText}>👁️ הצג</Text>
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <TouchableOpacity style={styles.trashBtn} onPress={() => scanToSlot(slot)}>
+                    <Text style={styles.actionText}>📷 סרוק</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.trashBtn} onPress={() => toggleSlotHidden(slot.key)}>
+                    <Text style={styles.actionText}>לא רלוונטי לי</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        );
+      })}
+      {personalHidden.length ? (
+        <>
+          <Text style={styles.label}>לא רלוונטי לי</Text>
+          <View style={styles.chipsWrap}>
+            {PERSONAL_SLOTS.filter((sl) => personalHidden.includes(sl.key)).map((sl) => (
+              <TouchableOpacity key={sl.key} style={styles.chip} onPress={() => toggleSlotHidden(sl.key)}>
+                <Text style={styles.chipText}>
+                  ↩️ {sl.icon} {sl.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      ) : null}
+    </PopupShell>
+  );
+
+  const dupesCount = (dupes ?? []).reduce((n, g) => n + g.length - 1, 0);
+  const dupesBytes = (dupes ?? []).reduce((n, g) => n + (g[0]?.size ?? 0) * (g.length - 1), 0);
+  const dupesPopup = (
+    <PopupShell
+      visible={!!dupes}
+      title={dupes && dupes.length ? `🧹 קבצים כפולים · ${dupesCount}` : '🧹 קבצים כפולים'}
+      onClose={() => setDupes(null)}
+      yellow={false}
+    >
+      {dupes && dupes.length === 0 ? (
+        <Text style={styles.empty}>✓ לא נמצאו קבצים כפולים בתיקיות המחוברות.</Text>
+      ) : (
+        <Text style={styles.popupHint}>
+          קבצים עם תוכן זהה לגמרי (גם אם השם שונה). מחיקה מעבירה לסל המחזור. אפשר לפנות {sizeText(dupesBytes)}.
+        </Text>
+      )}
+      {(dupes ?? []).map((g) => (
+        <View key={g[0].uri} style={styles.slot}>
+          <Text style={styles.rowTitle}>
+            📑 {g.length} עותקים זהים · {sizeText(g[0].size)}
+          </Text>
+          {g.map((e, i) => {
+            const secret = !!meta[e.uri]?.locked && !showLocked;
+            return (
+              <View key={e.uri} style={styles.dupeItem}>
+                <View style={styles.flex1}>
+                  <Text style={styles.dupeName} numberOfLines={2}>
+                    {i === 0 ? '✅ ' : ''}
+                    {secret ? '🔒 מסמך נעול' : `${docIcon(e.mime)} ${e.name}`}
+                  </Text>
+                  <Text style={styles.rowSub} numberOfLines={1}>
+                    📂 {e.folder}
+                    {e.modified ? ` · ${new Date(e.modified).toLocaleDateString('he-IL')}` : ''}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => openEntry(e)} hitSlop={8} style={styles.moreBtn}>
+                  <Text style={styles.dupeBtn}>👁️</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() =>
+                    confirm('מחיקה', `להעביר את "${e.name}" לסל המחזור?`, 'מחק', () => trashDocs([e]))
+                  }
+                  hitSlop={8}
+                  style={styles.moreBtn}
+                >
+                  <Text style={styles.dupeBtn}>🗑️</Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+          <TouchableOpacity style={[styles.trashBtn, { marginTop: 8 }]} onPress={() => dupeKeepFirst(g)}>
+            <Text style={styles.actionText}>🧹 השאר את המסומן ✅ ומחק את השאר</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </PopupShell>
+  );
+
+  const dateBar = (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll} keyboardShouldPersistTaps="handled">
+      {DATE_FILTERS.map(([k, label]) => (
+        <TouchableOpacity key={k} style={[styles.chip, dateFilter === k && styles.chipOn]} onPress={() => setDateFilter(k)}>
+          <Text style={[styles.chipText, dateFilter === k && styles.chipTextOn]}>📅 {label}</Text>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  );
+
+  const archivedBar = (count: number) =>
+    showArchived ? (
+      <TouchableOpacity onPress={() => setShowArchived(false)} hitSlop={6}>
+        <Text style={styles.popupHint}>🗄️ מוצגים גם מסמכים מהארכיון · הסתר אותם</Text>
+      </TouchableOpacity>
+    ) : count ? (
+      <TouchableOpacity onPress={() => setShowArchived(true)} hitSlop={6}>
+        <Text style={styles.popupHint}>🗄️ {count === 1 ? 'מסמך אחד בארכיון מוסתר' : `${count} מסמכים בארכיון מוסתרים`} · הצג</Text>
+      </TouchableOpacity>
+    ) : null;
+
+  const stageCPopups = (
+    <>
+      {listPopup}
+      {personalPopup}
+      {dupesPopup}
+      {previewEl}
+    </>
+  );
+
   // ---------- home ----------
   if (!current) {
     const showingSearch = search.trim().length >= 2;
@@ -1548,6 +2088,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
             onChangeText={setSearch}
           />
           {filterBar}
+          {showingSearch ? dateBar : null}
           {lockedBar(Object.values(meta).filter((x) => x.locked).length)}
 
           {showingSearch ? (
@@ -1561,6 +2102,36 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
             </>
           ) : (
             <>
+              <TouchableOpacity style={styles.row} onPress={() => setPersonalOpen(true)}>
+                <Text style={styles.folderIcon}>🗂️</Text>
+                <View style={styles.flex1}>
+                  <Text style={styles.rowTitle}>תיק אישי</Text>
+                  <Text style={[styles.rowSub, (personalState.missing > 0 || personalState.bad > 0) && styles.danger]}>
+                    {[
+                      personalState.ok ? `✅ ${personalState.ok} תקינים` : '',
+                      personalState.bad ? `⚠️ ${personalState.bad} פג/פג בקרוב` : '',
+                      personalState.missing ? `❌ ${personalState.missing} חסרים` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || 'תעודת זהות, רישיון, דרכון…'}
+                  </Text>
+                </View>
+                <Text style={styles.chev}>‹</Text>
+              </TouchableOpacity>
+              {tagList.length ? (
+                <>
+                  <Text style={styles.section}>🏷️ תגיות</Text>
+                  <View style={styles.chipsWrap}>
+                    {tagList.map(({ tag, count }) => (
+                      <TouchableOpacity key={tag} style={styles.chip} onPress={() => setListView({ kind: 'tag', tag })}>
+                        <Text style={styles.chipText}>
+                          {tag} · {count}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              ) : null}
               {expiring.length ? (
                 <>
                   <Text style={styles.section}>⏰ תוקף מתקרב</Text>
@@ -1604,7 +2175,23 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
                 </TouchableOpacity>
                 </View>
               ))}
-              <Text style={styles.section}>🗑️ סל מחזור</Text>
+              <Text style={styles.section}>🧰 כלים</Text>
+              <TouchableOpacity style={styles.row} onPress={() => setListView({ kind: 'archive' })}>
+                <Text style={styles.folderIcon}>🗄️</Text>
+                <View style={styles.flex1}>
+                  <Text style={styles.rowTitle}>ארכיון · {archived.length ? `${archived.length} מסמכים` : 'ריק'}</Text>
+                  <Text style={styles.rowSub}>מסמכים ישנים, מוסתרים מהרשימות</Text>
+                </View>
+                <Text style={styles.chev}>‹</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.row} onPress={findDupes}>
+                <Text style={styles.folderIcon}>🧹</Text>
+                <View style={styles.flex1}>
+                  <Text style={styles.rowTitle}>חיפוש קבצים כפולים</Text>
+                  <Text style={styles.rowSub}>מוצא קבצים זהים בכל התיקיות המחוברות</Text>
+                </View>
+                <Text style={styles.chev}>‹</Text>
+              </TouchableOpacity>
               {trashRow}
             </>
           )}
@@ -1616,6 +2203,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
         {qualityPopup}
         {newFolderPopup}
         {trashPopup}
+        {stageCPopups}
       </View>
     );
   }
@@ -1686,14 +2274,17 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
               onChangeText={setSearch}
             />
             {filterBar}
+            {dateBar}
             {lockedBar(entries.filter((e) => meta[e.uri]?.locked).length)}
+            {archivedBar(entries.filter((e) => meta[e.uri]?.archived && (showLocked || !meta[e.uri]?.locked)).length)}
             <View style={styles.chipsWrap}>
               {(
                 [
                   ['name', 'לפי שם'],
                   ['date', 'לפי תאריך'],
+                  ['size', 'לפי גודל'],
                   ['manual', 'ידני'],
-                ] as ['name' | 'date' | 'manual', string][]
+                ] as ['name' | 'date' | 'size' | 'manual', string][]
               ).map(([k, label]) => (
                 <TouchableOpacity key={k} style={[styles.chip, sortBy === k && styles.chipOn]} onPress={() => setSortBy(k)}>
                   <Text style={[styles.chipText, sortBy === k && styles.chipTextOn]}>{label}</Text>
@@ -1719,6 +2310,7 @@ export default function DocsTab({ dataVersion, notes, onAttachToNote, incoming, 
       {moveToPopup}
       {qualityPopup}
       {trashPopup}
+      {stageCPopups}
     </View>
   );
 }
@@ -1880,6 +2472,28 @@ const makeStyles = (c: Palette) => ({
     overflow: 'hidden' as const,
   },
   expiryBad: { color: c.danger, backgroundColor: c.dangerSoft },
+  tagBadge: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: c.text2,
+    backgroundColor: c.subtle,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    overflow: 'hidden' as const,
+  },
+  noteLine: { fontSize: 12.5, color: c.text2, marginTop: 4 },
+  noteInput: { minHeight: 110, textAlignVertical: 'top' as const },
+  tagAddRow: { flexDirection: 'row' as const, gap: 8, marginTop: 12, alignItems: 'center' as const },
+  tagAddBtn: { backgroundColor: c.accent, borderRadius: 12, paddingHorizontal: 16, minHeight: 44, justifyContent: 'center' as const },
+  slot: { paddingVertical: 10, paddingHorizontal: 10, borderRadius: 14, backgroundColor: c.card, borderWidth: 1, borderColor: c.border, marginTop: 10 },
+  slotMissing: { borderStyle: 'dashed' as const },
+  slotBad: { borderColor: c.danger },
+  slotHead: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 },
+  slotIcon: { fontSize: 28 },
+  dupeItem: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: c.border },
+  dupeName: { fontSize: 14, fontWeight: '700' as const, color: c.text },
+  dupeBtn: { fontSize: 20 },
   thumbImg: { borderRadius: 8, backgroundColor: c.subtle },
   thumbIcon: { borderRadius: 8, backgroundColor: c.subtle, alignItems: 'center' as const, justifyContent: 'center' as const },
   grid: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 10, marginTop: 8 },

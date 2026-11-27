@@ -381,11 +381,27 @@ export interface DocMeta {
   expiry?: string; // YYYY-MM-DD
   remindDays?: number; // remind this many days before the expiry (0 = no reminder)
   locked?: boolean; // needs fingerprint / phone lock to open or share
+  note?: string; // free text the user wrote about the document
+  tags?: string[]; // e.g. רכב, בריאות, ביטוח
+  archived?: boolean; // hidden from the ordinary lists, no expiry reminders
+  personal?: string; // slot in the "personal file" (id, license, passport…)
+  renewYearly?: boolean; // the document is renewed every year (car license, insurance…)
+  size?: number; // last known file size (for lists built from meta)
 }
+
+/** True when nothing worth keeping is left in a document's meta. */
+export const metaEmpty = (m: DocMeta | undefined) =>
+  !m ||
+  (!m.fav && !m.expiry && !m.locked && !m.note && !(m.tags && m.tags.length) && !m.archived && !m.personal && !m.renewYearly);
 
 export interface RecentDoc extends DocLink {
   at: number;
 }
+
+export const DOC_PERSONAL_HIDDEN_KEY = '@avi_doc_personal_hidden_v1';
+/** Personal-file slots the user marked as not relevant. */
+export const loadPersonalHidden = async () => (await readJson<string[]>(DOC_PERSONAL_HIDDEN_KEY)) ?? [];
+export const savePersonalHidden = (h: string[]) => writeJson(DOC_PERSONAL_HIDDEN_KEY, h);
 
 export const loadDocMeta = async () => (await readJson<Record<string, DocMeta>>(DOC_META_KEY)) ?? {};
 export const saveDocMeta = (m: Record<string, DocMeta>) => writeJson(DOC_META_KEY, m);

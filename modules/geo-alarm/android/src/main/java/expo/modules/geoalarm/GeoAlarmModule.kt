@@ -255,6 +255,23 @@ class GeoAlarmModule : Module() {
       DocumentsHelper.thumbnail(context, uri, mime, size, stamp.toLong())
     }
 
+    // ---------- documents stage C: preview + duplicates ----------
+    AsyncFunction("pdfPageCount") { uri: String ->
+      DocsPreview.pdfPageCount(context, uri)
+    }
+
+    AsyncFunction("renderPdfPage") { uri: String, page: Int, width: Int, stamp: Double ->
+      DocsPreview.renderPdfPage(context, uri, page, width, stamp.toLong())
+    }
+
+    AsyncFunction("previewImage") { uri: String, maxPx: Int, stamp: Double ->
+      DocsPreview.previewImage(context, uri, maxPx, stamp.toLong())
+    }
+
+    AsyncFunction("findDuplicates") { roots: List<String> ->
+      DocsPreview.findDuplicates(context, roots)
+    }
+
     Function("renameDocument") { uri: String, name: String ->
       DocumentsHelper.rename(context, uri, name)
     }
