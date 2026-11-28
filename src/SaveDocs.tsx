@@ -67,6 +67,8 @@ export function useSaveDocs() {
   const [busyText, setBusyText] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<(PreviewPic | null)[]>([]);
   const [turns, setTurns] = useState<number[]>([]);
+  // card scan: after the front side, offer (not force) the back side
+  const [sideAsk, setSideAsk] = useState<((back: boolean) => void) | null>(null);
   const resolver = useRef<((r: DocLink[] | null) => void) | null>(null);
 
   const finish = (r: DocLink[] | null) => {
@@ -180,6 +182,13 @@ export function useSaveDocs() {
       setBusyText(null);
     }
   };
+
+  /** Card scan: the front side is in; asks whether to photograph the back side too. Closing = one side only. */
+  const askSecondSide = () =>
+    new Promise<boolean>((resolve) => setSideAsk(() => (back: boolean) => {
+      setSideAsk(null);
+      resolve(back);
+    }));
 
   const files = req?.files ?? [];
   const canMerge = !!req?.mergeable && files.length > 1 && files.every((f) => isPdfOrImage(f.mime));
@@ -302,6 +311,28 @@ export function useSaveDocs() {
         )}
       </PopupShell>
 
+      <PopupShell
+        visible={!!sideAsk}
+        title="🪪 הצד הקדמי צולם ✓"
+        onClose={() => sideAsk?.(false)}
+        yellow={false}
+        footer={
+          <View style={styles.sideBtns}>
+            <TouchableOpacity style={styles.saveBtn} onPress={() => sideAsk?.(true)}>
+              <Text style={styles.saveText}>📷 צלם את הצד השני</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.oneSideBtn} onPress={() => sideAsk?.(false)}>
+              <Text style={styles.chipText}>שמור צד אחד</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      >
+        <Text style={styles.sideText}>
+          יש למסמך צד אחורי (למשל תעודת זהות)? הפוך את הכרטיס ולחץ "צלם את הצד השני". שני הצדדים יישמרו יחד בעמוד אחד.
+        </Text>
+        <Text style={styles.hint}>אין צד שני? לחץ "שמור צד אחד".</Text>
+      </PopupShell>
+
       <PopupShell visible={!!busyText} title="רגע…" onClose={() => {}} yellow={false}>
         <View style={styles.busyRow}>
           <ActivityIndicator color={c.accent} />
@@ -311,7 +342,7 @@ export function useSaveDocs() {
     </>
   );
 
-  return { ask, busy, element };
+  return { ask, busy, askSecondSide, element };
 }
 
 type SaveDocs = ReturnType<typeof useSaveDocs>;
@@ -334,19 +365,31 @@ export async function scanAndSave(
   opts?: { card?: boolean }
 ): Promise<ScannedDoc | null> {
   const quality = await loadScanQuality();
-  let r: { uri: string; pages: number } | null = null;
-  try {
-    r = await s.busy('⏳ משפר את הדפים הסרוקים…', () => GeoAlarm.scanDocument(quality, opts?.card ? 2 : 30));
-  } catch (e: any) {
-    Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (e?.message ?? ''));
-    return null;
-  }
+  const scanOnce = async (limit: number) => {
+    try {
+      return await s.busy('⏳ משפר את הדפים הסרוקים…', () => GeoAlarm.scanDocument(quality, limit));
+    } catch (e: any) {
+      Alert.alert('סריקת מסמך', 'הסורק לא זמין בטלפון: ' + (e?.message ?? ''));
+      return undefined;
+    }
+  };
+  // card: front side first, then the back side only if the user wants it
+  let r = await scanOnce(opts?.card ? 1 : 30);
   if (!r) return null;
+  if (opts?.card && (await s.askSecondSide())) {
+    const back = await scanOnce(1);
+    if (back) {
+      const both = await s.busy('⏳ מחבר את שני הצדדים…', () =>
+        GeoAlarm.combinePdf([r!.uri, back.uri], ['application/pdf', 'application/pdf'], quality === 'original' ? 'normal' : quality)
+      );
+      if (both) r = { uri: both, pages: 2 };
+    }
+  }
   // Google's scanner sometimes turns Hebrew pages upside down: set them right by reading them both ways.
   const up = await s.busy('⏳ בודק שאין עמודים הפוכים…', () => GeoAlarm.uprightScan(r!.uri));
   const base = up?.uri ?? r.uri;
   let src = base;
-  if (opts?.card) {
+  if (opts?.card && r.pages >= 2) {
     const one = await s.busy('⏳ מסדר את שני הצדדים בעמוד אחד…', () => GeoAlarm.cardOnePage(base));
     if (one) src = one;
     else Alert.alert('סריקת כרטיס', 'לא הצלחתי לסדר את הצדדים בעמוד אחד, נשמרה הסריקה הרגילה.');
@@ -409,5 +452,16 @@ const makeStyles = (c: Palette) => ({
     justifyContent: 'center' as const,
   },
   saveText: { fontSize: 16, fontWeight: '800' as const, color: c.onAccent },
+  sideBtns: { gap: 8 },
+  sideText: { fontSize: 16, color: c.text, lineHeight: 24, marginBottom: 8 },
+  oneSideBtn: {
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.subtle,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
   busyRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 12, paddingVertical: 10 },
 });
