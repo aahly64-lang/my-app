@@ -94,10 +94,36 @@ object ScanEnhancer {
    * Writes over the original document; returns true on success.
    */
   fun rotatePdf(ctx: Context, uriStr: String, degrees: Int): Boolean {
-    val uri = Uri.parse(uriStr)
+    return try {
+      val jpegs = renderTurned(ctx, Uri.parse(uriStr), { degrees }, 1700, 78) ?: return false
+      val out = ctx.contentResolver.openOutputStream(Uri.parse(uriStr), "wt") ?: return false
+      out.use { writePdf(it, jpegs) }
+      true
+    } catch (e: Throwable) {
+      false
+    }
+  }
+
+  /**
+   * Turns each page by its own amount (degrees[i], missing = 0) into a new PDF in the cache, leaving the
+   * source as it is. Used to set upside-down scan pages right. Returns the new file's uri, or null.
+   */
+  fun rotatePages(ctx: Context, uriStr: String, degrees: List<Int>): String? {
+    return try {
+      val jpegs = renderTurned(ctx, Uri.parse(uriStr), { degrees.getOrElse(it) { 0 } }, 2000, 82) ?: return null
+      val out = File(ctx.cacheDir, "upright-${System.currentTimeMillis()}.pdf")
+      FileOutputStream(out).use { writePdf(it, jpegs) }
+      Uri.fromFile(out).toString()
+    } catch (e: Throwable) {
+      null
+    }
+  }
+
+  /** Every page rendered, turned by its /Rotate plus extra(page) degrees, as JPEGs; null if unreadable. */
+  private fun renderTurned(ctx: Context, uri: Uri, extra: (Int) -> Int, maxSide: Int, q: Int): List<Triple<ByteArray, Int, Int>>? {
     val tmp = File(ctx.cacheDir, "rot-${System.currentTimeMillis()}.pdf")
     try {
-      ctx.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } } ?: return false
+      ctx.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } } ?: return null
       val jpegs = ArrayList<Triple<ByteArray, Int, Int>>()
       val pfd = ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY)
       val renderer = PdfRenderer(pfd)
@@ -106,16 +132,16 @@ object ScanEnhancer {
         for (i in 0 until renderer.pageCount) {
           val page = renderer.openPage(i)
           try {
-            val scale = 1700f / maxOf(page.width, page.height)
+            val scale = maxSide.toFloat() / maxOf(page.width, page.height)
             val w = (page.width * scale).toInt().coerceAtLeast(1)
             val h = (page.height * scale).toInt().coerceAtLeast(1)
             val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             bmp.eraseColor(Color.WHITE)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-            val m = Matrix().apply { postRotate((degrees + rotations[i]).toFloat()) }
-            val rot = Bitmap.createBitmap(bmp, 0, 0, w, h, m, true)
+            val deg = (((extra(i) + rotations[i]) % 360) + 360) % 360
+            val rot = if (deg == 0) bmp else Bitmap.createBitmap(bmp, 0, 0, w, h, Matrix().apply { postRotate(deg.toFloat()) }, true)
             if (rot !== bmp) bmp.recycle()
-            jpegs.add(Triple(toJpeg(rot, 78), rot.width, rot.height))
+            jpegs.add(Triple(toJpeg(rot, q), rot.width, rot.height))
             rot.recycle()
           } finally {
             page.close()
@@ -125,11 +151,7 @@ object ScanEnhancer {
         renderer.close()
         pfd.close()
       }
-      val out = ctx.contentResolver.openOutputStream(uri, "wt") ?: return false
-      out.use { writePdf(it, jpegs) }
-      return true
-    } catch (e: Throwable) {
-      return false
+      return if (jpegs.isEmpty()) null else jpegs
     } finally {
       tmp.delete()
     }
@@ -248,7 +270,7 @@ object ScanEnhancer {
    * /Rotate of every page, in page order. Returns null when it can't be determined safely
    * (compressed object streams, or a count that doesn't match), so the caller keeps the original file.
    */
-  private fun pageRotations(file: File, pageCount: Int): IntArray? {
+  internal fun pageRotations(file: File, pageCount: Int): IntArray? {
     val text = String(file.readBytes(), Charsets.ISO_8859_1)
     val pages = Regex("/Type\\s*/Page(?![a-zA-Z])").findAll(text).toList()
     val rotateRe = Regex("/Rotate\\s+(-?\\d+)")

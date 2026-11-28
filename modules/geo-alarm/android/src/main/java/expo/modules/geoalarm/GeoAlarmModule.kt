@@ -398,6 +398,14 @@ class GeoAlarmModule : Module() {
       ScanEnhancer.rotatePdf(context, uri, degrees)
     }
 
+    AsyncFunction("rotatePdfPages") { uri: String, degrees: List<Int> ->
+      ScanEnhancer.rotatePages(context, uri, degrees)
+    }
+
+    AsyncFunction("uprightScan") { uri: String ->
+      DocsOcr.upright(context, uri)
+    }
+
     /** Google's document scanner: returns the content uri of the scanned PDF, or null if cancelled. */
     AsyncFunction("scanDocument") { quality: String, pageLimit: Int, promise: Promise ->
       val activity = appContext.currentActivity

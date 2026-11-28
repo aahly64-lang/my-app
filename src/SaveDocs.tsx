@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as FileSystem from 'expo-file-system';
-import { GeoAlarm } from '../modules/geo-alarm';
+import { GeoAlarm, PreviewPic } from '../modules/geo-alarm';
 import { Palette, useTheme, useThemedStyles } from './theme';
 import { PopupShell } from './ui';
 import { docIcon } from './docLinks';
@@ -30,7 +30,12 @@ export interface SaveRequest {
   folder?: DocFolder;
   /** several PDFs / images: offer "one PDF" */
   mergeable?: boolean;
+  /** a fresh scan (one PDF): show its pages, a tap turns a page upside down. turned = pages already set right automatically */
+  pagesFlip?: { turned: number };
 }
+
+/** Pages shown in the save window of a scan (tap to turn). */
+const FLIP_PAGES = 12;
 
 /** Quick names for a new document (tap one, then add to it if needed). */
 const QUICK_NAMES = ['תעודת זהות', 'רישיון נהיגה', 'רישיון רכב', 'ביטוח', 'קבלה', 'חשבונית', 'חוזה', 'אחריות', 'מרשם', 'בדיקות'];
@@ -60,6 +65,8 @@ export function useSaveDocs() {
   const [merge, setMerge] = useState(true);
   const [saving, setSaving] = useState(false);
   const [busyText, setBusyText] = useState<string | null>(null);
+  const [thumbs, setThumbs] = useState<(PreviewPic | null)[]>([]);
+  const [turns, setTurns] = useState<number[]>([]);
   const resolver = useRef<((r: DocLink[] | null) => void) | null>(null);
 
   const finish = (r: DocLink[] | null) => {
@@ -82,7 +89,19 @@ export function useSaveDocs() {
     setName(r.files.length === 1 ? baseName(r.files[0].name) : baseName(r.files[0]?.name ?? '') + ' - מאוחד');
     setMerge(false);
     setSaving(false);
+    setThumbs([]);
+    setTurns([]);
     setReq(r);
+    const f0 = r.files[0];
+    if (r.pagesFlip && r.files.length === 1 && f0.mime.includes('pdf')) {
+      (async () => {
+        const n = Math.min(await GeoAlarm.pdfPageCount(f0.src), FLIP_PAGES);
+        const pics: (PreviewPic | null)[] = [];
+        for (let i = 0; i < n; i++) pics.push(await GeoAlarm.renderPdfPage(f0.src, i, 220, Date.now()));
+        setThumbs(pics);
+        setTurns(pics.map(() => 0));
+      })();
+    }
     return new Promise((res) => (resolver.current = res));
   };
 
@@ -103,8 +122,7 @@ export function useSaveDocs() {
 
   const save = async () => {
     if (!req || !folder || saving) return;
-    const files = req.files;
-    const single = files.length === 1 || merge;
+    const single = req.files.length === 1 || merge;
     const typed = cleanName(name);
     if (single && !typed) {
       Alert.alert('שם הקובץ', 'כתוב שם לקובץ.');
@@ -113,6 +131,17 @@ export function useSaveDocs() {
     setSaving(true);
     const out: DocLink[] = [];
     const failed: string[] = [];
+    let files = req.files;
+    if (turns.some((t) => t)) {
+      const turned = await GeoAlarm.rotatePdfPages(files[0].src, turns);
+      if (!turned) {
+        setSaving(false);
+        Alert.alert('הפיכת עמודים', 'לא הצלחתי להפוך את העמודים. אפשר לשמור בלי, ולהפוך אחר כך ב"🔄 סובב עמודים".');
+        setTurns(turns.map(() => 0));
+        return;
+      }
+      files = [{ ...files[0], src: turned }];
+    }
     if (merge && files.length > 1) {
       const quality = await loadScanQuality();
       const pdf = await GeoAlarm.combinePdf(files.map((f) => f.src), files.map((f) => f.mime), quality === 'original' ? 'normal' : quality);
@@ -182,6 +211,35 @@ export function useSaveDocs() {
             ))}
             {files.length > 8 ? <Text style={styles.hint}>ועוד {files.length - 8}…</Text> : null}
           </View>
+        ) : null}
+
+        {thumbs.length ? (
+          <>
+            <Text style={styles.label}>העמודים</Text>
+            <Text style={styles.hint}>
+              {req?.pagesFlip?.turned
+                ? `🔄 ${req.pagesFlip.turned === 1 ? 'עמוד אחד היה הפוך ותוקן' : `${req.pagesFlip.turned} עמודים היו הפוכים ותוקנו`} לבד. `
+                : ''}
+              עמוד הפוך? הקש עליו כדי להפוך אותו.
+            </Text>
+            <View style={styles.chipsWrap}>
+              {thumbs.map((t, i) =>
+                t ? (
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.thumbBox}
+                    onPress={() => setTurns((a) => a.map((v, j) => (j === i ? (v ? 0 : 180) : v)))}
+                  >
+                    <Image
+                      source={{ uri: t.uri }}
+                      style={{ width: 70, height: Math.round((70 * t.height) / t.width), transform: [{ rotate: turns[i] ? '180deg' : '0deg' }] }}
+                    />
+                    <Text style={styles.thumbText}>{turns[i] ? '🔄 יתהפך' : `${i + 1} · 🔄 הפוך`}</Text>
+                  </TouchableOpacity>
+                ) : null
+              )}
+            </View>
+          </>
         ) : null}
 
         {canMerge ? (
@@ -284,18 +342,22 @@ export async function scanAndSave(
     return null;
   }
   if (!r) return null;
-  let src = r.uri;
+  // Google's scanner sometimes turns Hebrew pages upside down: set them right by reading them both ways.
+  const up = await s.busy('⏳ בודק שאין עמודים הפוכים…', () => GeoAlarm.uprightScan(r!.uri));
+  const base = up?.uri ?? r.uri;
+  let src = base;
   if (opts?.card) {
-    const one = await s.busy('⏳ מסדר את שני הצדדים בעמוד אחד…', () => GeoAlarm.cardOnePage(r!.uri));
+    const one = await s.busy('⏳ מסדר את שני הצדדים בעמוד אחד…', () => GeoAlarm.cardOnePage(base));
     if (one) src = one;
     else Alert.alert('סריקת כרטיס', 'לא הצלחתי לסדר את הצדדים בעמוד אחד, נשמרה הסריקה הרגילה.');
   }
-  const text = await s.busy('⏳ קורא את הטקסט שבסריקה…', () => GeoAlarm.readText(r!.uri, 'application/pdf', 2));
+  const text = await s.busy('⏳ קורא את הטקסט שבסריקה…', () => GeoAlarm.readText(base, 'application/pdf', 2));
   const suggest = suggestFromText(text);
   const saved = await s.ask({
     title: opts?.card ? '🪪 שמירת הכרטיס' : '📷 שמירת הסריקה',
     files: [{ src, name: (name || suggest.name || (opts?.card ? 'כרטיס' : scanName())) + '.pdf', mime: 'application/pdf' }],
     folder,
+    pagesFlip: { turned: up?.turned ?? 0 },
   });
   const d = saved?.[0];
   return d ? { ...d, suggest } : null;
@@ -328,6 +390,15 @@ const makeStyles = (c: Palette) => ({
   chipOn: { backgroundColor: c.accent, borderColor: c.accent },
   chipText: { fontSize: 13.5, color: c.text, fontWeight: '600' as const },
   chipTextOn: { color: c.onAccent },
+  thumbBox: {
+    alignItems: 'center' as const,
+    padding: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.card,
+  },
+  thumbText: { fontSize: 11.5, color: c.text, marginTop: 4 },
   fileList: { gap: 4, marginBottom: 6 },
   fileLine: { fontSize: 14, color: c.text },
   saveBtn: {

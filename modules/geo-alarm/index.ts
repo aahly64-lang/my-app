@@ -89,6 +89,8 @@ type GeoAlarmNative = {
   signPdf(src: string, page: number, png: string, x: number, y: number, w: number): Promise<string | null>;
   moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
+  rotatePdfPages(uri: string, degrees: number[]): Promise<string | null>;
+  uprightScan(uri: string): Promise<{ uri: string; turned: number } | null>;
   combinePdf(uris: string[], mimes: string[], quality: string, overwrite: string | null): Promise<string | null>;
   getInitialSharedFiles(): Promise<SharedFile[]>;
   pickContact(): Promise<{ name: string; phone: string } | null>;
@@ -304,6 +306,22 @@ export const GeoAlarm = {
       return native ? await native.rotatePdf(uri, degrees) : false;
     } catch {
       return false;
+    }
+  },
+  /** A new PDF (in the cache) with page i turned by degrees[i]; the source is left as it is. */
+  rotatePdfPages: async (uri: string, degrees: number[]): Promise<string | null> => {
+    try {
+      return native ? await native.rotatePdfPages(uri, degrees) : null;
+    } catch {
+      return null;
+    }
+  },
+  /** Sets upside-down (Hebrew) scan pages right, by reading them both ways. null = nothing turned. */
+  uprightScan: async (uri: string): Promise<{ uri: string; turned: number } | null> => {
+    try {
+      return native ? await native.uprightScan(uri) : null;
+    } catch {
+      return null;
     }
   },
   /**
