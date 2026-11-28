@@ -297,7 +297,7 @@ export function bgIsDark(hex: string): boolean {
  */
 export function readableBg(hex: string): string {
   if (!isHex(hex)) return '#FFFFFF';
-  return bgIsDark(hex) ? ensureContrast(hex, [LIGHT_TEXT], 9, '#000000') : ensureContrast(hex, [DARK_TEXT], 9, '#FFFFFF');
+  return bgIsDark(hex) ? ensureContrast(hex, [LIGHT_TEXT], 7, '#000000') : ensureContrast(hex, [DARK_TEXT], 7, '#FFFFFF');
 }
 
 /** The button color for an accent setting (preset key or custom hex). */
@@ -309,7 +309,7 @@ export function accentColorFor(accentKey: string | undefined, dark: boolean): st
 
 /** True when the buttons would almost melt into the background. */
 export function accentTooClose(accent: string, bg: string): boolean {
-  return contrast(accent, bg) < 1.3;
+  return contrast(accent, bg) < 1.25;
 }
 
 /** A version of the accent that stands out from the background (for the "fix" button). */

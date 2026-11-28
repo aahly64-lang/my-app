@@ -299,8 +299,6 @@ const makeStyles = (c: Palette) => ({
     borderBottomWidth: 0.5,
     borderBottomColor: c.border,
     backgroundColor: c.card,
-    borderBottomWidth: 1,
-    borderColor: c.cardEdge,
   },
   hBtn: { paddingHorizontal: 8, paddingVertical: 6 },
   hBtnText: { fontSize: 22, color: c.text, fontWeight: '800' as const },
