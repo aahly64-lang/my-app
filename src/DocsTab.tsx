@@ -51,6 +51,8 @@ import {
   loadDocMeta,
   loadDocRecent,
   loadDocView,
+  loadFolderHelpSeen,
+  saveFolderHelpSeen,
   loadPersonalHidden,
   metaEmpty,
   savePersonalHidden,
@@ -225,6 +227,9 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
   const [showArchived, setShowArchived] = useState(false);
   const [listView, setListView] = useState<{ kind: 'archive' } | { kind: 'tag'; tag: string } | null>(null);
   const [personalOpen, setPersonalOpen] = useState(false);
+  // one "📁 תיקיות" button: choose new folder / existing folder; simple help the first time
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const [folderHelp, setFolderHelp] = useState(false);
   const [personalHidden, setPersonalHidden] = useState<string[]>([]);
   const [dupes, setDupes] = useState<DocEntry[][] | null>(null);
   const [noteText, setNoteText] = useState('');
@@ -447,14 +452,27 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
 
   const startNewFolder = () => {
     if (!folders.length) {
-      Alert.alert('📁 תיקייה חדשה', 'קודם צריך לחבר תיקייה אחת מהטלפון (למשל "מסמכים"). אחרי זה אפשר ליצור תיקיות בלחיצה.', [
-        { text: 'ביטול', style: 'cancel' },
-        { text: 'חבר תיקייה', onPress: connectFolder },
-      ]);
+      Alert.alert(
+        '📁 תיקייה חדשה',
+        'בפעם הראשונה צריך לבחור מקום בטלפון שבו יישמרו התיקיות (למשל "Documents" או "מסמכים"). אחרי זה יוצרים תיקיות בלחיצה אחת.',
+        [
+          { text: 'ביטול', style: 'cancel' },
+          { text: 'בחר מקום', onPress: connectFolder },
+        ]
+      );
       return;
     }
     setNewFolderParent(folders.length === 1 ? folders[0] : null);
     setNewFolder('');
+  };
+
+  const openFolders = async () => {
+    setFoldersOpen(true);
+    if (!(await loadFolderHelpSeen())) setFolderHelp(true);
+  };
+  const closeFolderHelp = () => {
+    setFolderHelp(false);
+    saveFolderHelpSeen();
   };
 
   const disconnect = (f: DocFolder) => {
@@ -1955,6 +1973,67 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
     </PopupShell>
   );
 
+  const foldersPopup = (
+    <PopupShell visible={foldersOpen && !folderHelp} title="📁 תיקיות" onClose={() => setFoldersOpen(false)} yellow={false}>
+      <Text style={styles.helpText}>המסמכים נשמרים בתיקיות שבטלפון שלך. מה תרצה לעשות?</Text>
+      <TouchableOpacity
+        style={styles.folderChoice}
+        onPress={() => {
+          setFoldersOpen(false);
+          startNewFolder();
+        }}
+      >
+        <Text style={styles.folderChoiceTitle}>➕ ליצור תיקייה חדשה</Text>
+        <Text style={styles.rowSub}>תיקייה ריקה למסמכים, למשל "מסמכים של הבית".</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.folderChoice}
+        onPress={() => {
+          setFoldersOpen(false);
+          connectFolder();
+        }}
+      >
+        <Text style={styles.folderChoiceTitle}>📂 להשתמש בתיקייה שכבר יש בטלפון</Text>
+        <Text style={styles.rowSub}>למשל "Documents" או "תמונות". הקבצים נשארים במקום שלהם, שום דבר לא מועתק.</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => setFolderHelp(true)} hitSlop={8}>
+        <Text style={styles.helpLink}>❓ איך זה עובד</Text>
+      </TouchableOpacity>
+    </PopupShell>
+  );
+
+  const folderHelpPopup = (
+    <PopupShell
+      visible={folderHelp}
+      title="❓ איך עובדות התיקיות"
+      onClose={closeFolderHelp}
+      yellow={false}
+      footer={
+        <TouchableOpacity style={styles.bigBtn} onPress={closeFolderHelp}>
+          <Text style={styles.bigBtnText}>הבנתי 👍</Text>
+        </TouchableOpacity>
+      }
+    >
+      <Text style={styles.helpHead}>➕ תיקייה חדשה</Text>
+      <Text style={styles.helpText}>1. לוחצים "ליצור תיקייה חדשה".</Text>
+      <Text style={styles.helpText}>2. כותבים שם, למשל "קבלות", ולוחצים "צור".</Text>
+      <Text style={styles.helpText}>
+        בפעם הראשונה בלבד הטלפון ישאל איפה לשמור. בוחרים "Documents" (מסמכים), ולמטה לוחצים "שימוש בתיקייה הזו" ואז "אישור".
+      </Text>
+
+      <Text style={styles.helpHead}>📂 תיקייה שכבר יש בטלפון</Text>
+      <Text style={styles.helpText}>1. לוחצים "להשתמש בתיקייה שכבר יש בטלפון".</Text>
+      <Text style={styles.helpText}>2. נפתחת רשימת התיקיות של הטלפון. לוחצים על התיקייה שרוצים.</Text>
+      <Text style={styles.helpText}>3. למטה לוחצים "שימוש בתיקייה הזו", ואז "אישור".</Text>
+      <Text style={styles.helpText}>זהו. התיקייה מופיעה ברשימה כאן.</Text>
+
+      <Text style={styles.helpHead}>💡 טוב לדעת</Text>
+      <Text style={styles.helpText}>• לא רואים את התיקייה? לוחצים על ☰ למעלה משמאל ובוחרים את שם הטלפון.</Text>
+      <Text style={styles.helpText}>• "נתק" רק מוריד את התיקייה מהרשימה כאן. הקבצים לא נמחקים.</Text>
+      <Text style={styles.helpText}>• אפשר לפתוח את ההסבר הזה שוב דרך "📁 תיקיות" ← "❓ איך זה עובד".</Text>
+    </PopupShell>
+  );
+
   const trashBytes = trashSize(trash);
   const trashFull = trashBytes > TRASH_WARN_BYTES;
   const trashSummary = trash.length
@@ -2224,6 +2303,8 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
     <>
       {listPopup}
       {personalPopup}
+      {foldersPopup}
+      {folderHelpPopup}
       {dupesPopup}
       {previewEl}
       <DocSign entry={signing} onClose={() => setSigning(null)} onSigned={onSigned} />
@@ -2244,14 +2325,8 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
             <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={() => scan()}>
               <Text style={styles.actionPrimaryText}>📷 סרוק מסמך</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn} onPress={connectFolder}>
-              <Text style={styles.actionText}>+ חבר תיקייה</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={startNewFolder}
-            >
-              <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
+            <TouchableOpacity style={styles.actionBtn} onPress={openFolders}>
+              <Text style={styles.actionText}>📁 תיקיות</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.actionsRow2}>
@@ -2336,7 +2411,7 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
               <Text style={styles.section}>📂 תיקיות</Text>
               {folders.length === 0 ? (
                 <Text style={styles.empty}>
-                  חבר תיקייה מהטלפון (למשל "מסמכים" או "הורדות"). הקבצים מוצגים כמו שהם, בלי העתקה.
+                  עוד אין תיקיות. לחץ על "📁 תיקיות" למעלה כדי ליצור תיקייה חדשה או להשתמש בתיקייה שכבר יש בטלפון.
                 </Text>
               ) : null}
               {folders.map((f) => (
@@ -2596,6 +2671,11 @@ const makeStyles = (c: Palette) => ({
   ghostSub: { fontSize: 12, color: c.muted, marginTop: 2 },
   upBar: { position: 'absolute' as const, top: 8, left: 12, right: 12, zIndex: 10, elevation: 10, padding: 18, borderRadius: 14, borderWidth: 2, borderStyle: 'dashed' as const, borderColor: c.accent, backgroundColor: c.subtle },
   upBarText: { color: c.text, fontWeight: '700' as const, textAlign: 'center' as const },
+  helpHead: { fontSize: 16, fontWeight: '800' as const, color: c.text, marginTop: 14, marginBottom: 4 },
+  helpText: { fontSize: 15, color: c.text, lineHeight: 23, marginBottom: 4 },
+  helpLink: { fontSize: 15, color: c.accent, fontWeight: '700' as const, marginTop: 14, textAlign: 'center' as const },
+  folderChoice: { padding: 14, borderRadius: 14, backgroundColor: c.card, borderWidth: 1, borderColor: c.border, marginTop: 10 },
+  folderChoiceTitle: { fontSize: 16, fontWeight: '800' as const, color: c.text, marginBottom: 2 },
   popupHint: { fontSize: 12.5, color: c.muted, marginTop: 10, lineHeight: 18 },
   actionPrimaryText: { fontSize: 15, fontWeight: '800' as const, color: c.onAccent },
   input: {

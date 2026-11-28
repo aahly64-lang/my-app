@@ -450,6 +450,11 @@ export type ScanQuality = 'small' | 'normal' | 'high' | 'original';
 export const loadScanQuality = async () => ((await readJson<string>(SCAN_QUALITY_KEY)) as ScanQuality | null) ?? 'normal';
 export const saveScanQuality = (q: ScanQuality) => writeJson(SCAN_QUALITY_KEY, q);
 
+export const DOC_FOLDER_HELP_KEY = '@avi_doc_folder_help_v1';
+/** true once the simple "how folders work" explanation was seen (it opens by itself only the first time). */
+export const loadFolderHelpSeen = async () => (await readJson<boolean>(DOC_FOLDER_HELP_KEY)) ?? false;
+export const saveFolderHelpSeen = () => writeJson(DOC_FOLDER_HELP_KEY, true);
+
 export const DOC_ORDER_KEY = '@avi_doc_order_v1';
 /** Manual order of files per folder uri (file names). */
 export const loadDocOrder = async () => (await readJson<Record<string, string[]>>(DOC_ORDER_KEY)) ?? {};
