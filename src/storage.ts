@@ -299,7 +299,12 @@ export const saveMorning = (m: { enabled: boolean; time: string }) => writeJson(
 export interface DocFolder {
   uri: string;
   name: string;
+  /** copy this folder's files to Google Drive too (with the documents backup). undefined = yes (older folders) */
+  drive?: boolean;
 }
+
+/** A folder picked through Google Drive's own provider: the phone lets apps only read there. */
+export const isDriveUri = (uri: string) => /^content:\/\/com\.google\.android\.apps\.docs/.test(uri);
 
 export const loadThemeMode = async () => ((await readJson<string>(THEME_KEY)) as 'auto' | 'light' | 'dark' | null) ?? 'auto';
 export const saveThemeMode = (m: string) => writeJson(THEME_KEY, m);
@@ -454,10 +459,14 @@ export type ScanQuality = 'small' | 'normal' | 'high' | 'original';
 export const loadScanQuality = async () => ((await readJson<string>(SCAN_QUALITY_KEY)) as ScanQuality | null) ?? 'normal';
 export const saveScanQuality = (q: ScanQuality) => writeJson(SCAN_QUALITY_KEY, q);
 
-export const DOC_FOLDER_HELP_KEY = '@avi_doc_folder_help_v1';
-/** true once the simple "how folders work" explanation was seen (it opens by itself only the first time). */
-export const loadFolderHelpSeen = async () => (await readJson<boolean>(DOC_FOLDER_HELP_KEY)) ?? false;
-export const saveFolderHelpSeen = () => writeJson(DOC_FOLDER_HELP_KEY, true);
+export const DOC_BASE_KEY = '@avi_doc_base_v1';
+/** The phone folder (picked once, normally "Documents") in which "📁 צור תיקייה" creates folders. */
+export const loadDocBase = () => readJson<string>(DOC_BASE_KEY);
+export const saveDocBase = (uri: string) => writeJson(DOC_BASE_KEY, uri);
+export const DOC_DRIVE_ASKED_KEY = '@avi_doc_drive_asked_v1';
+/** Drive-provider folders the user was already told about (read-only there). */
+export const loadDriveAsked = async () => (await readJson<string[]>(DOC_DRIVE_ASKED_KEY)) ?? [];
+export const saveDriveAsked = (u: string[]) => writeJson(DOC_DRIVE_ASKED_KEY, u);
 
 export const DOC_ORDER_KEY = '@avi_doc_order_v1';
 /** Manual order of files per folder uri (file names). */

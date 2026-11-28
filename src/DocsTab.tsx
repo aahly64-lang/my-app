@@ -38,6 +38,8 @@ import { cancelRing, scheduleReminder } from './rings';
 import { refreshMorning } from './morning';
 import { PendingFile, scanAndSave, scanName, useSaveDocs } from './SaveDocs';
 import DocSign from './DocSign';
+import { connectDrive, loadDriveBackup, saveDriveBackup } from './driveBackup';
+import { docsDriveFolderName, syncDocFiles } from './driveFiles';
 import { OcrSuggestion, suggestFromText } from './ocrSuggest';
 import DocPreview from './DocPreview';
 import { DATE_FILTERS, DateFilter, PERSONAL_SLOTS, PersonalSlot, addYear, allTags, passesDate, slotOf } from './docInfo';
@@ -51,8 +53,11 @@ import {
   loadDocMeta,
   loadDocRecent,
   loadDocView,
-  loadFolderHelpSeen,
-  saveFolderHelpSeen,
+  isDriveUri,
+  loadDocBase,
+  saveDocBase,
+  loadDriveAsked,
+  saveDriveAsked,
   loadPersonalHidden,
   metaEmpty,
   savePersonalHidden,
@@ -71,6 +76,11 @@ import {
 } from './storage';
 
 // ---------------------------------------------------------------- helpers
+
+/** The phone's "Documents" folder: the folder picker opens there (not on the last place, e.g. Google Drive). */
+const DOCUMENTS_URI = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments';
+const DRIVE_PICK_TEXT =
+  'בתיקייה בגוגל דרייב הטלפון לא מרשה לאפליקציה לשמור או ליצור תיקיות.\n\nבחר תיקייה בטלפון. כדי שהקבצים יהיו גם בדרייב: "📁 צור תיקייה" ← "בטלפון + גם בגוגל דרייב".';
 
 type TypeFilter = 'all' | 'pdf' | 'image' | 'word' | 'excel' | 'other';
 const FILTERS: [TypeFilter, string][] = [
@@ -227,9 +237,6 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
   const [showArchived, setShowArchived] = useState(false);
   const [listView, setListView] = useState<{ kind: 'archive' } | { kind: 'tag'; tag: string } | null>(null);
   const [personalOpen, setPersonalOpen] = useState(false);
-  // one "📁 תיקיות" button: choose new folder / existing folder; simple help the first time
-  const [foldersOpen, setFoldersOpen] = useState(false);
-  const [folderHelp, setFolderHelp] = useState(false);
   const [personalHidden, setPersonalHidden] = useState<string[]>([]);
   const [dupes, setDupes] = useState<DocEntry[][] | null>(null);
   const [noteText, setNoteText] = useState('');
@@ -253,7 +260,7 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
   const [renameText, setRenameText] = useState('');
   const [selected, setSelected] = useState<Set<string> | null>(null); // multi-select
   const [newFolder, setNewFolder] = useState<string | null>(null); // name being typed
-  const [newFolderParent, setNewFolderParent] = useState<DocFolder | null>(null); // home: where to create
+  const [newFolderDrive, setNewFolderDrive] = useState(true); // home: also copy the new folder to Google Drive
   const [scanBusy, setScanBusy] = useState(false);
   const [quality, setQuality] = useState<ScanQuality>('normal');
   const [qualityPick, setQualityPick] = useState(false);
@@ -413,8 +420,13 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
   // ---------- folders ----------
   const connectFolder = async () => {
     try {
-      const r = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+      const r = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(DOCUMENTS_URI);
       if (!r.granted) return;
+      if (isDriveUri(r.directoryUri)) {
+        GeoAlarm.releaseFolder(r.directoryUri);
+        Alert.alert('☁️ תיקייה בגוגל דרייב', DRIVE_PICK_TEXT);
+        return;
+      }
       if (folders.some((f) => f.uri === r.directoryUri)) {
         Alert.alert('כבר מחוברת', 'התיקייה הזו כבר מופיעה ברשימה.');
         return;
@@ -427,53 +439,133 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
     }
   };
 
+  /** The phone folder that "📁 צור תיקייה" creates folders in. First time: the phone's picker, opened on "Documents". */
+  const phoneBase = async (): Promise<string | null> => {
+    const saved = await loadDocBase();
+    if (saved && !isDriveUri(saved)) return saved;
+    // a phone folder the user connected himself (not one created here: those have "/document/" in the address)
+    const own = folders.find((f) => !isDriveUri(f.uri) && !f.uri.includes('/document/'));
+    if (own) {
+      saveDocBase(own.uri);
+      return own.uri;
+    }
+    const go = await new Promise<boolean>((resolve) =>
+      Alert.alert(
+        '📁 פעם ראשונה בלבד',
+        'הטלפון יפתח עכשיו את התיקייה "Documents" (מסמכים).\n\nלחץ למטה על "שימוש בתיקייה הזו" ואז על "אישור".\n\nמאז כל תיקייה חדשה נוצרת בלחיצה אחת.',
+        [
+          { text: 'ביטול', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'המשך', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      )
+    );
+    if (!go) return null;
+    try {
+      const r = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(DOCUMENTS_URI);
+      if (!r.granted) return null;
+      if (isDriveUri(r.directoryUri)) {
+        GeoAlarm.releaseFolder(r.directoryUri);
+        Alert.alert('☁️ תיקייה בגוגל דרייב', DRIVE_PICK_TEXT);
+        return null;
+      }
+      saveDocBase(r.directoryUri);
+      return r.directoryUri;
+    } catch {
+      Alert.alert('שגיאה', 'לא הצלחתי לפתוח את התיקיות של הטלפון.');
+      return null;
+    }
+  };
+
   const createFolder = async () => {
     const name = (newFolder ?? '').trim().replace(/[\\/:*?"<>|]/g, '');
-    const parent = current ?? newFolderParent;
-    if (!parent || !name) return;
+    if (!name) return;
     if (current && entries.some((e) => e.isDir && e.name === name)) {
       Alert.alert('תיקייה חדשה', `כבר יש כאן תיקייה בשם "${name}".`);
       return;
     }
-    const uri = await GeoAlarm.createFolder(parent.uri, name);
-    setNewFolder(null);
-    if (!uri) {
-      Alert.alert('תיקייה חדשה', 'לא הצלחתי ליצור את התיקייה. ייתכן שאין הרשאת כתיבה – נתק וחבר את התיקייה שוב.');
+    if (!current && folders.some((f) => f.name === name)) {
+      Alert.alert('תיקייה חדשה', `כבר יש תיקייה בשם "${name}".`);
       return;
     }
-    if (current) refresh();
-    else {
-      // home: show the new folder in the main list as a folder of its own
-      const next = [...folders, { uri, name }];
-      setFolders(next);
-      saveDocFolders(next);
+    const wantDrive = !current && newFolderDrive;
+    setNewFolder(null);
+    const parent = current ? current.uri : await phoneBase();
+    if (!parent) return;
+    const uri = await GeoAlarm.createFolder(parent, name);
+    if (!uri) {
+      Alert.alert('תיקייה חדשה', 'לא הצלחתי ליצור את התיקייה. נסה שוב, ואם זה חוזר – ספר לי.');
+      return;
     }
+    if (current) {
+      refresh();
+      return;
+    }
+    // home: the new folder is shown in the main list as a folder of its own
+    const next = [...folders, { uri, name, drive: wantDrive }];
+    setFolders(next);
+    saveDocFolders(next);
+    if (!wantDrive) {
+      Alert.alert('נוצרה ✓', `התיקייה "${name}" נוצרה בטלפון.`);
+      return;
+    }
+    let cfg = await loadDriveBackup();
+    if (!cfg.enabled) {
+      try {
+        cfg = await connectDrive();
+      } catch (e: any) {
+        Alert.alert(
+          'נוצרה ✓ (בטלפון)',
+          `התיקייה "${name}" נוצרה בטלפון, אבל החיבור לגוגל דרייב לא הצליח: ${e?.message ?? ''}\n\nאפשר להתחבר אחר כך בהגדרות ← גיבוי לגוגל דרייב, והתיקייה תועתק לבד.`
+        );
+        return;
+      }
+    }
+    if (cfg.files === false) await saveDriveBackup({ ...cfg, files: true });
+    syncDocFiles(true).catch(() => {});
+    Alert.alert(
+      'נוצרה ✓',
+      `התיקייה "${name}" נוצרה בטלפון, וכל מה שתשים בה יועתק לבד לגוגל דרייב, לתיקייה "${docsDriveFolderName}/${name}".`
+    );
   };
 
   const startNewFolder = () => {
-    if (!folders.length) {
-      Alert.alert(
-        '📁 תיקייה חדשה',
-        'בפעם הראשונה צריך לבחור מקום בטלפון שבו יישמרו התיקיות (למשל "Documents" או "מסמכים"). אחרי זה יוצרים תיקיות בלחיצה אחת.',
-        [
-          { text: 'ביטול', style: 'cancel' },
-          { text: 'בחר מקום', onPress: connectFolder },
-        ]
-      );
-      return;
-    }
-    setNewFolderParent(folders.length === 1 ? folders[0] : null);
+    setNewFolderDrive(true);
     setNewFolder('');
   };
 
-  const openFolders = async () => {
-    setFoldersOpen(true);
-    if (!(await loadFolderHelpSeen())) setFolderHelp(true);
-  };
-  const closeFolderHelp = () => {
-    setFolderHelp(false);
-    saveFolderHelpSeen();
-  };
+  // a folder picked inside Google Drive: the phone lets apps only read there – say so once and offer to remove it
+  useEffect(() => {
+    const drive = folders.filter((f) => isDriveUri(f.uri));
+    if (!drive.length) return;
+    let gone = false;
+    loadDriveAsked().then((asked) => {
+      const f = drive.find((x) => !asked.includes(x.uri));
+      if (!f || gone) return;
+      saveDriveAsked([...asked, f.uri]);
+      Alert.alert(
+        '☁️ תיקייה מהדרייב',
+        `התיקייה "${f.name}" נמצאת בגוגל דרייב. משם הטלפון מרשה רק להסתכל על קבצים, ולא לשמור או ליצור תיקיות.\n\nבמקומה: לחץ "📁 צור תיקייה" ובחר "בטלפון וגם בגוגל דרייב".\n\nלהסיר אותה מהרשימה? (שום קובץ לא יימחק.)`,
+        [
+          { text: 'השאר לצפייה', style: 'cancel' },
+          {
+            text: 'הסר מהרשימה',
+            onPress: () => {
+              GeoAlarm.releaseFolder(f.uri);
+              setFolders((cur) => {
+                const next = cur.filter((x) => x.uri !== f.uri);
+                saveDocFolders(next);
+                return next;
+              });
+            },
+          },
+        ]
+      );
+    });
+    return () => {
+      gone = true;
+    };
+  }, [folders]);
 
   const disconnect = (f: DocFolder) => {
     confirm('ניתוק תיקייה', `לנתק את "${f.name}"? הקבצים עצמם לא יימחקו.`, 'נתק', () => {
@@ -1947,90 +2039,36 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
         autoFocus
         onSubmitEditing={createFolder}
       />
-      {!current && folders.length > 1 ? (
+      {!current ? (
         <>
-          <Text style={styles.popupHint}>איפה ליצור?</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-            {folders.map((f) => (
-              <TouchableOpacity
-                key={f.uri}
-                style={[styles.chip, newFolderParent?.uri === f.uri && styles.chipOn]}
-                onPress={() => setNewFolderParent(f)}
-              >
-                <Text style={[styles.chipText, newFolderParent?.uri === f.uri && styles.chipTextOn]}>📁 {f.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={styles.popupHint}>איפה לשמור?</Text>
+          <TouchableOpacity style={[styles.folderChoice, !newFolderDrive && styles.folderChoiceOn]} onPress={() => setNewFolderDrive(false)}>
+            <Text style={styles.folderChoiceTitle}>{!newFolderDrive ? '🔘' : '⚪'} 📱 בטלפון</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.folderChoice, newFolderDrive && styles.folderChoiceOn]} onPress={() => setNewFolderDrive(true)}>
+            <Text style={styles.folderChoiceTitle}>{newFolderDrive ? '🔘' : '⚪'} 📱 בטלפון + ☁️ גם בגוגל דרייב</Text>
+            <Text style={styles.rowSub}>עובד גם בלי אינטרנט, ומועתק לבד לדרייב.</Text>
+          </TouchableOpacity>
         </>
       ) : null}
       <TouchableOpacity
-        style={[styles.actionBtn, styles.actionPrimary, !current && !newFolderParent && { opacity: 0.5 }]}
-        disabled={!current && !newFolderParent}
+        style={[styles.actionBtn, styles.actionPrimary, { marginTop: 12 }, !(newFolder ?? '').trim() && { opacity: 0.5 }]}
+        disabled={!(newFolder ?? '').trim()}
         onPress={createFolder}
       >
         <Text style={styles.actionPrimaryText}>צור</Text>
       </TouchableOpacity>
-    </PopupShell>
-  );
-
-  const foldersPopup = (
-    <PopupShell visible={foldersOpen && !folderHelp} title="📁 תיקיות" onClose={() => setFoldersOpen(false)} yellow={false}>
-      <Text style={styles.helpText}>המסמכים נשמרים בתיקיות שבטלפון שלך. מה תרצה לעשות?</Text>
-      <TouchableOpacity
-        style={styles.folderChoice}
-        onPress={() => {
-          setFoldersOpen(false);
-          startNewFolder();
-        }}
-      >
-        <Text style={styles.folderChoiceTitle}>➕ ליצור תיקייה חדשה</Text>
-        <Text style={styles.rowSub}>תיקייה ריקה למסמכים, למשל "מסמכים של הבית".</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={styles.folderChoice}
-        onPress={() => {
-          setFoldersOpen(false);
-          connectFolder();
-        }}
-      >
-        <Text style={styles.folderChoiceTitle}>📂 להשתמש בתיקייה שכבר יש בטלפון</Text>
-        <Text style={styles.rowSub}>למשל "Documents" או "תמונות". הקבצים נשארים במקום שלהם, שום דבר לא מועתק.</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setFolderHelp(true)} hitSlop={8}>
-        <Text style={styles.helpLink}>❓ איך זה עובד</Text>
-      </TouchableOpacity>
-    </PopupShell>
-  );
-
-  const folderHelpPopup = (
-    <PopupShell
-      visible={folderHelp}
-      title="❓ איך עובדות התיקיות"
-      onClose={closeFolderHelp}
-      yellow={false}
-      footer={
-        <TouchableOpacity style={styles.bigBtn} onPress={closeFolderHelp}>
-          <Text style={styles.bigBtnText}>הבנתי 👍</Text>
+      {!current ? (
+        <TouchableOpacity
+          onPress={() => {
+            setNewFolder(null);
+            connectFolder();
+          }}
+          hitSlop={8}
+        >
+          <Text style={styles.helpLink}>יש לך כבר תיקייה בטלפון? לחץ כאן כדי להוסיף אותה</Text>
         </TouchableOpacity>
-      }
-    >
-      <Text style={styles.helpHead}>➕ תיקייה חדשה</Text>
-      <Text style={styles.helpText}>1. לוחצים "ליצור תיקייה חדשה".</Text>
-      <Text style={styles.helpText}>2. כותבים שם, למשל "קבלות", ולוחצים "צור".</Text>
-      <Text style={styles.helpText}>
-        בפעם הראשונה בלבד הטלפון ישאל איפה לשמור. בוחרים "Documents" (מסמכים), ולמטה לוחצים "שימוש בתיקייה הזו" ואז "אישור".
-      </Text>
-
-      <Text style={styles.helpHead}>📂 תיקייה שכבר יש בטלפון</Text>
-      <Text style={styles.helpText}>1. לוחצים "להשתמש בתיקייה שכבר יש בטלפון".</Text>
-      <Text style={styles.helpText}>2. נפתחת רשימת התיקיות של הטלפון. לוחצים על התיקייה שרוצים.</Text>
-      <Text style={styles.helpText}>3. למטה לוחצים "שימוש בתיקייה הזו", ואז "אישור".</Text>
-      <Text style={styles.helpText}>זהו. התיקייה מופיעה ברשימה כאן.</Text>
-
-      <Text style={styles.helpHead}>💡 טוב לדעת</Text>
-      <Text style={styles.helpText}>• לא רואים את התיקייה? לוחצים על ☰ למעלה משמאל ובוחרים את שם הטלפון.</Text>
-      <Text style={styles.helpText}>• "נתק" רק מוריד את התיקייה מהרשימה כאן. הקבצים לא נמחקים.</Text>
-      <Text style={styles.helpText}>• אפשר לפתוח את ההסבר הזה שוב דרך "📁 תיקיות" ← "❓ איך זה עובד".</Text>
+      ) : null}
     </PopupShell>
   );
 
@@ -2303,8 +2341,6 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
     <>
       {listPopup}
       {personalPopup}
-      {foldersPopup}
-      {folderHelpPopup}
       {dupesPopup}
       {previewEl}
       <DocSign entry={signing} onClose={() => setSigning(null)} onSigned={onSigned} />
@@ -2325,8 +2361,8 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
             <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={() => scan()}>
               <Text style={styles.actionPrimaryText}>📷 סרוק מסמך</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn} onPress={openFolders}>
-              <Text style={styles.actionText}>📁 תיקיות</Text>
+            <TouchableOpacity style={styles.actionBtn} onPress={startNewFolder}>
+              <Text style={styles.actionText}>📁 צור תיקייה</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.actionsRow2}>
@@ -2411,7 +2447,7 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
               <Text style={styles.section}>📂 תיקיות</Text>
               {folders.length === 0 ? (
                 <Text style={styles.empty}>
-                  עוד אין תיקיות. לחץ על "📁 תיקיות" למעלה כדי ליצור תיקייה חדשה או להשתמש בתיקייה שכבר יש בטלפון.
+                  עוד אין תיקיות. לחץ על "📁 צור תיקייה" למעלה.
                 </Text>
               ) : null}
               {folders.map((f) => (
@@ -2504,13 +2540,22 @@ function DocsTab({ dataVersion, notes, onAttachToNote, incoming, onIncomingDone,
               </Text>
               {viewToggle}
             </View>
+            {isDriveUri(path[0].uri) ? (
+              <Text style={[styles.popupHint, styles.danger]}>
+                ☁️ תיקייה מגוגל דרייב: אפשר רק להסתכל על הקבצים. כדי לשמור לדרייב – "📁 צור תיקייה" במסך הראשי ← "גם בגוגל דרייב".
+              </Text>
+            ) : null}
             <View style={styles.actionsRow}>
-              <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={() => scan()}>
-                <Text style={styles.actionPrimaryText}>📷 סרוק לכאן</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn} onPress={() => setNewFolder('')}>
-                <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
-              </TouchableOpacity>
+              {!isDriveUri(path[0].uri) ? (
+                <>
+                  <TouchableOpacity style={[styles.actionBtn, styles.actionPrimary]} onPress={() => scan()}>
+                    <Text style={styles.actionPrimaryText}>📷 סרוק לכאן</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => setNewFolder('')}>
+                    <Text style={styles.actionText}>📁 תיקייה חדשה</Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
               {path.length === 1 ? (
                 <TouchableOpacity style={styles.actionBtn} onPress={() => disconnect(current)}>
                   <Text style={styles.actionText}>נתק תיקייה</Text>
@@ -2675,6 +2720,7 @@ const makeStyles = (c: Palette) => ({
   helpText: { fontSize: 15, color: c.text, lineHeight: 23, marginBottom: 4 },
   helpLink: { fontSize: 15, color: c.accent, fontWeight: '700' as const, marginTop: 14, textAlign: 'center' as const },
   folderChoice: { padding: 14, borderRadius: 14, backgroundColor: c.card, borderWidth: 1, borderColor: c.border, marginTop: 10 },
+  folderChoiceOn: { borderColor: c.accent, borderWidth: 2 },
   folderChoiceTitle: { fontSize: 16, fontWeight: '800' as const, color: c.text, marginBottom: 2 },
   popupHint: { fontSize: 12.5, color: c.muted, marginTop: 10, lineHeight: 18 },
   actionPrimaryText: { fontSize: 15, fontWeight: '800' as const, color: c.onAccent },

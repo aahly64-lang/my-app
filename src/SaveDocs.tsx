@@ -12,6 +12,7 @@ import {
   loadDocFolders,
   loadDocSaveFolder,
   loadScanQuality,
+  isDriveUri,
   saveDocFolders,
   saveDocSaveFolder,
 } from './storage';
@@ -82,7 +83,8 @@ export function useSaveDocs() {
 
   const ask = async (r: SaveRequest): Promise<DocLink[] | null> => {
     resolver.current?.(null);
-    const list = await loadDocFolders();
+    // Drive-provider folders are read-only for apps: not offered as a place to save
+    const list = (await loadDocFolders()).filter((f) => !isDriveUri(f.uri));
     setFolders(list);
     if (r.folder) setFolder(r.folder);
     else {
@@ -113,8 +115,15 @@ export function useSaveDocs() {
 
   const connect = async () => {
     try {
-      const r = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+      const r = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync(
+        'content://com.android.externalstorage.documents/tree/primary%3ADocuments'
+      );
       if (!r.granted) return;
+      if (isDriveUri(r.directoryUri)) {
+        GeoAlarm.releaseFolder(r.directoryUri);
+        Alert.alert('☁️ תיקייה בגוגל דרייב', 'בתיקייה בגוגל דרייב הטלפון לא מרשה לשמור. בחר תיקייה בטלפון.');
+        return;
+      }
       if (folders.some((f) => f.uri === r.directoryUri)) return;
       const f = { uri: r.directoryUri, name: GeoAlarm.documentFolderName(r.directoryUri) };
       const next = [...folders, f];

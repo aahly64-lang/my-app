@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DocEntry, GeoAlarm } from '../modules/geo-alarm';
 import { DriveBackupConfig, UPLOAD, api, folderId, loadDriveBackup, saveDriveBackup, token } from './driveBackup';
-import { loadDocFolders } from './storage';
+import { isDriveUri, loadDocFolders } from './storage';
 
 /**
  * Backs up the documents themselves (the files in the connected folders) to Google Drive, into
@@ -147,7 +147,8 @@ export async function syncDocFiles(force = false, onProgress?: (p: FilesProgress
     if (!idx.folders[docsKey]) idx.folders[docsKey] = await findOrCreateFolder(t, base, DOCS_FOLDER);
     const docsId = idx.folders[docsKey];
 
-    const roots = await loadDocFolders();
+    // folders marked "phone only" and folders that are in Drive already are not copied
+    const roots = (await loadDocFolders()).filter((f) => f.drive !== false && !isDriveUri(f.uri));
     const seen = new Set<string>();
     const walked = new Set<string>();
     const all: [DocEntry, string, { uri: string; name: string }][] = [];
