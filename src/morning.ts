@@ -1,4 +1,5 @@
 import * as Notifications from 'expo-notifications';
+import { GeoAlarm } from '../modules/geo-alarm';
 import { DocMeta, Task, loadDocMeta, loadMorning, loadTasks } from './storage';
 
 // v2: no number on the app icon (a channel's badge setting can't be changed later)
@@ -27,6 +28,7 @@ const ymd = (d: Date) =>
  * (and overdue ones), plus documents whose expiry is close. Rebuilt whenever the tasks or the setting change, so the content stays current.
  */
 export async function scheduleMorning(tasks: Task[], cfg: { enabled: boolean; time: string }) {
+  saveAgenda(tasks);
   for (const id of ids) await Notifications.cancelScheduledNotificationAsync(id).catch(() => {});
   if (!cfg.enabled) return;
   await Notifications.setNotificationChannelAsync(MORNING_CHANNEL, {
@@ -73,5 +75,27 @@ export async function scheduleMorning(tasks: Task[], cfg: { enabled: boolean; ti
 export async function refreshMorning() {
   try {
     await scheduleMorning(await loadTasks(), await loadMorning());
+  } catch {}
+}
+
+/**
+ * Open tasks per day for the next two weeks, saved in the phone so an alarm that "reads aloud"
+ * can say today's tasks even while the app is closed.
+ */
+export function saveAgenda(tasks: Task[]) {
+  try {
+    const out: Record<string, { count: number; late: number; titles: string[] }> = {};
+    const now = new Date();
+    for (let i = 0; i < 14; i++) {
+      const day = ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, 12));
+      const open = tasks.filter((t) => !t.done && t.due && t.due <= day);
+      const sorted = [...open].sort((a, b) => Number(!!b.star) - Number(!!a.star) || (a.due! < b.due! ? -1 : 1));
+      out[day] = {
+        count: open.length,
+        late: open.filter((t) => t.due! < day).length,
+        titles: sorted.slice(0, 5).map((t) => t.title.replace(/\s+/g, ' ').trim()),
+      };
+    }
+    GeoAlarm.setAgenda(JSON.stringify(out));
   } catch {}
 }

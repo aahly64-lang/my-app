@@ -217,6 +217,21 @@ export interface AlarmClock {
   snoozeEnabled: boolean;
   snoozeMin: number;
   snoozeCount: number; // -1 = unlimited
+  /** one-time alarm on a specific date (YYYY-MM-DD); only when days is empty */
+  date?: string;
+  /** repeating alarm every other week; weekAnchor = epoch-day (UTC days) of the Sunday of a ringing week */
+  everyOtherWeek?: boolean;
+  weekAnchor?: number;
+  /** epoch ms of the next occurrence the user chose to skip once */
+  skipNext?: number;
+  /** don't ring on Israeli holidays (Hebrew calendar) */
+  skipHolidays?: boolean;
+  /** what must be done to stop the ring (default: just press stop) */
+  challenge?: 'none' | 'math' | 'shake';
+  /** after stopping: read aloud the time and today's tasks */
+  speak?: boolean;
+  /** a quick nap alarm; removed after it rings */
+  nap?: boolean;
 }
 
 export type SoundKind = 'alarm' | 'timer' | 'reminder' | 'geo';

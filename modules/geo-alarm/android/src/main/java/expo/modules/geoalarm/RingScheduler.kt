@@ -12,7 +12,8 @@ import java.util.Calendar
  * JSON fields: id, at (epoch ms), title, body, kind, sound (uri or ""), durationMs,
  * snoozeMin (0 = no snooze), snoozeLeft (-1 = unlimited), daysMask (bit0 = Sunday ... bit6 = Saturday,
  * 0 = not repeating), hour, minute, endAt (epoch ms, 0 = no end; repeating rings stop after it),
- * silent (true = ordinary notification instead of a full-screen ring).
+ * silent (true = ordinary notification instead of a full-screen ring), weekAnchor (every other week),
+ * skipHolidays, challenge ("none" | "math" | "shake" to stop), speak (read the time and today's tasks after stopping).
  */
 object RingScheduler {
   private const val PREFS = "geo_alarm_rings_v1"
@@ -68,7 +69,14 @@ object RingScheduler {
   }
 
   /** Next time matching hour:minute on an allowed day, strictly after [from]. */
-  fun computeNext(hour: Int, minute: Int, daysMask: Int, from: Long): Long {
+  fun computeNext(hour: Int, minute: Int, daysMask: Int, from: Long): Long =
+    computeNext(hour, minute, daysMask, 0L, false, from)
+
+  /**
+   * Next ring time strictly after [from]. weekAnchor (epoch-day of a Sunday, 0 = every week) makes it ring
+   * every other week; skipHolidays skips Israeli holidays.
+   */
+  fun computeNext(hour: Int, minute: Int, daysMask: Int, weekAnchor: Long, skipHolidays: Boolean, from: Long): Long {
     val base = Calendar.getInstance().apply {
       timeInMillis = from
       set(Calendar.HOUR_OF_DAY, hour)
@@ -76,15 +84,34 @@ object RingScheduler {
       set(Calendar.SECOND, 0)
       set(Calendar.MILLISECOND, 0)
     }
-    for (d in 0..7) {
+    val biweekly = weekAnchor > 0 && daysMask != 0
+    for (d in 0..400) {
       val c = base.clone() as Calendar
       c.add(Calendar.DAY_OF_YEAR, d)
       if (c.timeInMillis <= from) continue
       val bit = c.get(Calendar.DAY_OF_WEEK) - 1 // Sunday = 0
-      if (daysMask == 0 || (daysMask and (1 shl bit)) != 0) return c.timeInMillis
+      if (daysMask != 0 && (daysMask and (1 shl bit)) == 0) continue
+      if (biweekly && Math.floorMod(Math.floorDiv(epochDay(c) - weekAnchor, 7L), 2L) != 0L) continue
+      if (skipHolidays && daysMask != 0 && Holidays.nameAt(c.timeInMillis).isNotEmpty()) continue
+      return c.timeInMillis
     }
     return base.timeInMillis + 24L * 60 * 60 * 1000
   }
+
+  /** Local calendar date as days since 1970-01-01. */
+  private fun epochDay(c: Calendar): Long {
+    val u = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+      clear()
+      set(c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH))
+    }
+    return Math.floorDiv(u.timeInMillis, 86_400_000L)
+  }
+
+  fun computeNext(ring: JSONObject, from: Long): Long =
+    computeNext(
+      ring.optInt("hour"), ring.optInt("minute"), ring.optInt("daysMask", 0),
+      ring.optLong("weekAnchor", 0L), ring.optBoolean("skipHolidays", false), from
+    )
 
   fun schedule(ctx: Context, ring: JSONObject) {
     val id = ring.getString("id")
@@ -108,7 +135,7 @@ object RingScheduler {
     AlarmNotifier.show(ctx, ring)
     val daysMask = ring.optInt("daysMask", 0)
     if (daysMask != 0) {
-      val next = computeNext(ring.optInt("hour"), ring.optInt("minute"), daysMask, System.currentTimeMillis() + 1000)
+      val next = computeNext(ring, System.currentTimeMillis() + 1000)
       val endAt = ring.optLong("endAt", 0L)
       if (endAt > 0 && next > endAt) {
         val all = load(ctx)
@@ -155,7 +182,7 @@ object RingScheduler {
       val daysMask = ring.optInt("daysMask", 0)
       if (at <= now) {
         if (daysMask != 0) {
-          at = computeNext(ring.optInt("hour"), ring.optInt("minute"), daysMask, now)
+          at = computeNext(ring, now)
           val endAt = ring.optLong("endAt", 0L)
           if (endAt > 0 && at > endAt) {
             toRemove.add(id)

@@ -58,12 +58,80 @@ export function nextAlarmTime(hour: number, minute: number, days: number[], from
   return from + 24 * 3600 * 1000;
 }
 
-export async function scheduleAlarmClock(a: AlarmClock) {
+/** Epoch-day (days since 1970-01-01) of a local date. */
+export function epochDay(d: Date): number {
+  return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000);
+}
+
+/** Epoch-day of the Sunday of the week containing `at` (plus `weeks` weeks). */
+export function weekSunday(at: number, weeks = 0): number {
+  const d = new Date(at);
+  return epochDay(d) - d.getDay() + weeks * 7;
+}
+
+/** The next occurrence strictly after `from`, ignoring skipNext. 0 = none (one-time alarm in the past). */
+function occurrenceAfter(a: AlarmClock, from: number): number {
+  if (a.days.length === 0) {
+    if (a.date) {
+      const [y, mo, d] = a.date.split('-').map(Number);
+      const t = new Date(y, mo - 1, d, a.hour, a.minute, 0, 0).getTime();
+      return t > from ? t : 0;
+    }
+    return nextAlarmTime(a.hour, a.minute, [], from);
+  }
+  const spec = {
+    hour: a.hour,
+    minute: a.minute,
+    daysMask: daysMask(a.days),
+    weekAnchor: a.everyOtherWeek ? a.weekAnchor ?? 0 : 0,
+    skipHolidays: !!a.skipHolidays,
+  };
+  const native = GeoAlarm.computeNextRing(spec, from);
+  if (native > from) return native;
+  // Fallback without the native module (holidays not known here).
+  let t = from;
+  for (let i = 0; i < 60; i++) {
+    t = nextAlarmTime(a.hour, a.minute, a.days, t);
+    if (!spec.weekAnchor || (((Math.floor((epochDay(new Date(t)) - spec.weekAnchor) / 7) % 2) + 2) % 2) === 0) return t;
+  }
+  return t;
+}
+
+/** When the alarm will ring next (taking a skipped occurrence into account). 0 = not in the future. */
+export function alarmNextAt(a: AlarmClock, from = Date.now()): number {
+  let t = occurrenceAfter(a, from);
+  if (t && a.skipNext && t === a.skipNext) t = occurrenceAfter(a, t + 1000);
+  return t;
+}
+
+/** The occurrence after the next one (for "skip once"). */
+export function alarmOccurrenceAfterNext(a: AlarmClock): number {
+  const first = occurrenceAfter(a, Date.now());
+  return first ? occurrenceAfter(a, first + 1000) : 0;
+}
+
+/** Next occurrence ignoring skipNext. */
+export function alarmPlainNext(a: AlarmClock): number {
+  return occurrenceAfter(a, Date.now());
+}
+
+/** Holiday that a holiday-skipping alarm will skip next ('' if none before its next ring). */
+export function skippedHolidayBefore(a: AlarmClock, nextAt: number): string {
+  if (!a.skipHolidays || a.days.length === 0 || !nextAt) return '';
+  const plain = occurrenceAfter({ ...a, skipHolidays: false }, Date.now());
+  if (!plain || plain >= nextAt) return '';
+  return GeoAlarm.holidayName(plain);
+}
+
+/** Schedules the alarm; returns when it will ring (0 = not scheduled). */
+export async function scheduleAlarmClock(a: AlarmClock): Promise<number> {
   cancelRing(alarmRingId(a.id));
-  if (!a.enabled) return;
+  if (!a.enabled) return 0;
+  const at = alarmNextAt(a);
+  if (!at) return 0;
   GeoAlarm.scheduleRing({
     id: alarmRingId(a.id),
-    at: nextAlarmTime(a.hour, a.minute, a.days),
+    at,
     title: a.label || 'שעון מעורר',
     body: `${String(a.hour).padStart(2, '0')}:${String(a.minute).padStart(2, '0')}`,
     kind: 'alarm',
@@ -74,7 +142,26 @@ export async function scheduleAlarmClock(a: AlarmClock) {
     daysMask: daysMask(a.days),
     hour: a.hour,
     minute: a.minute,
+    weekAnchor: a.days.length && a.everyOtherWeek ? a.weekAnchor ?? 0 : 0,
+    skipHolidays: !!a.skipHolidays && a.days.length > 0,
+    challenge: a.challenge ?? 'none',
+    speak: !!a.speak,
   });
+  return at;
+}
+
+const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+
+/** "יום ב' 07:00" style label of a ring time, with today/tomorrow words. */
+export function ringDayText(at: number): string {
+  const d = new Date(at);
+  const today = epochDay(new Date());
+  const diff = epochDay(d) - today;
+  const time = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (diff === 0) return `היום ${time}`;
+  if (diff === 1) return `מחר ${time}`;
+  if (diff < 7) return `יום ${DAY_NAMES[d.getDay()]} ${time}`;
+  return `${d.toLocaleDateString('he-IL')} ${time}`;
 }
 
 export function scheduledRingIds(): Set<string> {

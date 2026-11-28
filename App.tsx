@@ -29,6 +29,7 @@ import { refreshMorning } from './src/morning';
 import SetupScreen, { allAlarmPermissionsOk } from './src/SetupScreen';
 import WorkoutsTab, { SharedLink, extractUrl } from './src/WorkoutsTab';
 import TasksTab, { countDueToday } from './src/TasksTab';
+import { AlarmWhen, NextAlarmLine } from './src/AlarmBits';
 import SearchScreen from './src/SearchScreen';
 import { openDoc } from './src/docLinks';
 import { Pane, WhenOpen, markTabPress } from './src/perf';
@@ -90,13 +91,17 @@ import { installCrashLog, showLastCrash } from './src/crashLog';
 
 installCrashLog();
 import { PopupShell, ReminderEditor, ReminderValue, confirm, emptyReminder } from './src/ui';
-import { DAY_LETTERS, daysSummary, displayYMD, endOfDay, hhmm, parseHHMM, parseYMD, pickTimeWheels } from './src/pickers';
+import { DAY_LETTERS, daysSummary, displayYMD, endOfDay, hhmm, parseHHMM, parseYMD, pickDate, pickTimeWheels } from './src/pickers';
 import {
   TIMER_RING_ID,
   alarmRingId,
+  alarmNextAt,
+  alarmPlainNext,
   cancelRing,
   nextAlarmTime,
   noteRingId,
+  ringDayText,
+  weekSunday,
   scheduleAlarmClock,
   scheduleReminder,
   scheduleSimpleRing,
@@ -474,12 +479,18 @@ function AppInner({
     // One-time alarms that already rang are switched off.
     const ids = scheduledRingIds();
     let changed = false;
-    const next = list.map((a) => {
-      if (a.enabled && a.days.length === 0 && !ids.has(alarmRingId(a.id)) && !ids.has(`${alarmRingId(a.id)}:snooze`)) {
-        changed = true;
-        return { ...a, enabled: false };
-      }
-      return a;
+    const rang = (a: AlarmClock) =>
+      a.enabled && a.days.length === 0 && !ids.has(alarmRingId(a.id)) && !ids.has(`${alarmRingId(a.id)}:snooze`);
+    // Quick nap alarms are removed once they rang.
+    const kept = list.filter((a) => !(a.nap && (rang(a) || !a.enabled)));
+    if (kept.length !== list.length) changed = true;
+    const next = kept.map((a) => {
+      let b = a;
+      if (rang(b)) b = { ...b, enabled: false };
+      // A skipped ring that already passed is forgotten.
+      if (b.skipNext && b.skipNext < Date.now()) b = { ...b, skipNext: undefined };
+      if (b !== a) changed = true;
+      return b;
     });
     if (changed) await saveAlarmClocks(next);
     return next;
@@ -876,21 +887,97 @@ function AppInner({
     setAlarmFormIsNew(true);
   };
 
+  const sortAlarms = (list: AlarmClock[]) =>
+    [...list].sort((x, y) => x.hour * 60 + x.minute - (y.hour * 60 + y.minute));
+
+  /** Cleans fields that don't fit the alarm's kind (one-time / repeating). */
+  const normalizeAlarm = (f: AlarmClock): AlarmClock => {
+    let a: AlarmClock = { ...f, enabled: true };
+    if (a.days.length) {
+      a.date = undefined;
+      if (a.everyOtherWeek && !a.weekAnchor) a.weekAnchor = weekSunday(Date.now());
+    } else {
+      a = { ...a, everyOtherWeek: false, skipHolidays: false, skipNext: undefined };
+    }
+    // A skip chosen for another time/day (the alarm was changed) no longer applies.
+    if (a.skipNext && a.skipNext !== alarmPlainNext({ ...a, skipNext: undefined })) a.skipNext = undefined;
+    return a;
+  };
+
   const saveAlarmForm = async () => {
     if (!alarmForm) return;
-    const a = { ...alarmForm, enabled: true };
-    const next = alarmFormIsNew ? [...alarms, a] : alarms.map((x) => (x.id === a.id ? a : x));
-    next.sort((x, y) => x.hour * 60 + x.minute - (y.hour * 60 + y.minute));
-    await scheduleAlarmClock(a);
+    const a = normalizeAlarm(alarmForm);
+    const at = await scheduleAlarmClock(a);
+    if (!at) {
+      Alert.alert('השעה כבר עברה', 'התאריך והשעה שבחרת כבר עברו. בחר מועד עתידי.');
+      return;
+    }
+    const next = sortAlarms(alarmFormIsNew ? [...alarms, a] : alarms.map((x) => (x.id === a.id ? a : x)));
     await persistAlarms(next);
     setAlarmForm(null);
-    Alert.alert('השעון נקבע', `השעון יצלצל ${untilText(nextAlarmTime(a.hour, a.minute, a.days))}.`);
+    Alert.alert('השעון נקבע', `השעון יצלצל ${ringDayText(at)}, ${untilText(at)}.`);
   };
 
   const toggleAlarm = async (a: AlarmClock) => {
     const updated = { ...a, enabled: !a.enabled };
-    await scheduleAlarmClock(updated);
+    if (updated.enabled && !(await scheduleAlarmClock(updated))) {
+      Alert.alert('השעה כבר עברה', 'התאריך של השעון הזה עבר. פתח אותו ובחר תאריך חדש.');
+      return;
+    }
+    if (!updated.enabled) await scheduleAlarmClock(updated);
     await persistAlarms(alarms.map((x) => (x.id === a.id ? updated : x)));
+  };
+
+  /** Skip only the next ring of a repeating alarm (or undo the skip). Takes effect at once. */
+  const toggleSkipNext = async (a: AlarmClock) => {
+    const skipping = !!a.skipNext && a.skipNext > Date.now();
+    const updated: AlarmClock = { ...a, enabled: true, skipNext: skipping ? undefined : alarmPlainNext({ ...a, skipNext: undefined }) };
+    const at = await scheduleAlarmClock(updated);
+    await persistAlarms(alarms.map((x) => (x.id === a.id ? updated : x)));
+    setAlarmForm(null);
+    Alert.alert(skipping ? 'הדילוג בוטל' : 'מדלג פעם אחת', `השעון יצלצל ${ringDayText(at)}, ${untilText(at)}.`);
+  };
+
+  const duplicateAlarm = (a: AlarmClock) => {
+    setAlarmForm({ ...a, id: newId(), skipNext: undefined, nap: undefined, label: a.label ? `${a.label} (עותק)` : '' });
+    setAlarmFormIsNew(true);
+  };
+
+  /** Quick nap: a one-time alarm in N minutes; replaces an earlier nap and is removed after it rings. */
+  const startNap = async (minutes: number) => {
+    const t = new Date(Date.now() + minutes * 60_000);
+    const a: AlarmClock = {
+      id: newId(),
+      label: `נמנום ${minutes} דק'`,
+      hour: t.getHours(),
+      minute: t.getMinutes(),
+      days: [],
+      date: localDateString(t),
+      enabled: true,
+      snoozeEnabled: true,
+      snoozeMin: 5,
+      snoozeCount: 3,
+      nap: true,
+    };
+    for (const old of alarms.filter((x) => x.nap)) cancelRing(alarmRingId(old.id));
+    const at = await scheduleAlarmClock(a);
+    await persistAlarms(sortAlarms([...alarms.filter((x) => !x.nap), a]));
+    Alert.alert('😴 נמנום', `השעון יצלצל ב-${hhmm(a.hour, a.minute)}, ${untilText(at)}.`);
+  };
+
+  const pickChallenge = (ch: 'none' | 'math' | 'shake') => {
+    if (!alarmForm) return;
+    if (ch === 'none') {
+      setAlarmForm({ ...alarmForm, challenge: 'none' });
+      return;
+    }
+    const what = ch === 'math' ? 'לפתור תרגיל חשבון קצר (חיבור)' : 'לנער את הטלפון חזק 15 פעמים';
+    confirm(
+      ch === 'math' ? 'תרגיל חשבון לכיבוי' : 'ניעור לכיבוי',
+      `כדי לעצור את השעון יהיה צריך ${what}. אי אפשר יהיה לעצור אותו מההתראה, רק מהמסך שלו.\nהנודניק נשאר זמין כרגיל. אם לא עושים כלום, השעון נעצר לבד אחרי 10 דקות.`,
+      'הפעל',
+      () => setAlarmForm((f) => (f ? { ...f, challenge: ch } : f))
+    );
   };
 
   const deleteAlarm = (a: AlarmClock) => {
@@ -1381,8 +1468,17 @@ function AppInner({
                   <Text style={styles.whiteBtnText}>+ הוסף</Text>
                 </TouchableOpacity>
               </View>
+              <NextAlarmLine alarms={alarms} />
+              <View style={styles.chipsWrapRow}>
+                <Text style={[styles.itemSub, { alignSelf: 'center', marginEnd: 8 }]}>😴 נמנום:</Text>
+                {[20, 30, 45, 60].map((m) => (
+                  <TouchableOpacity key={m} style={[styles.chip, styles.chipSpaced]} onPress={() => startNap(m)}>
+                    <Text style={styles.chipText}>{m} דק'</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
               {alarms.length === 0 ? <Text style={styles.emptyText}>עדיין אין שעונים מעוררים.</Text> : null}
-              {(showAllAlarms ? alarms : alarms.slice(-LIST_PREVIEW)).map((a) => (
+              {(showAllAlarms ? alarms : alarms.slice(0, LIST_PREVIEW)).map((a) => (
                 <View key={a.id} style={styles.alarmItem}>
                   <TouchableOpacity
                     style={styles.flex1}
@@ -1394,11 +1490,16 @@ function AppInner({
                     <Text style={[styles.alarmTime, !a.enabled && styles.mutedText]}>{hhmm(a.hour, a.minute)}</Text>
                     <Text style={styles.itemSub}>
                       {a.label ? `${a.label} · ` : ''}
-                      {daysSummary(a.days)}
+                      {a.days.length === 0 && a.date ? displayYMD(a.date) : daysSummary(a.days)}
+                      {a.days.length && a.everyOtherWeek ? ' · כל שבועיים' : ''}
                       {a.snoozeEnabled
                         ? ` · נודניק ${a.snoozeMin} דק' ${a.snoozeCount < 0 ? '(ללא הגבלה)' : `×${a.snoozeCount}`}`
                         : ' · בלי נודניק'}
+                      {a.days.length && a.skipHolidays ? ' · 🕎 בלי חגים' : ''}
+                      {a.challenge === 'math' ? ' · 🧮' : a.challenge === 'shake' ? ' · 📳' : ''}
+                      {a.speak ? ' · 🔊' : ''}
                     </Text>
+                    <AlarmWhen a={a} />
                   </TouchableOpacity>
                   <Switch
                 trackColor={{ false: c.switchOff, true: c.accent }}
@@ -1736,6 +1837,100 @@ function AppInner({
                 );
               })}
             </View>
+            <View style={styles.chipsWrapRow}>
+              {(
+                [
+                  ['כל יום', [0, 1, 2, 3, 4, 5, 6]],
+                  ['ימי חול', [0, 1, 2, 3, 4]],
+                  ['סוף שבוע', [5, 6]],
+                  ['פעם אחת', []],
+                ] as [string, number[]][]
+              ).map(([name, days]) => {
+                const on = alarmForm.days.join() === days.join();
+                return (
+                  <TouchableOpacity
+                    key={name}
+                    style={[styles.chip, styles.chipSpaced, on && styles.chipActive]}
+                    onPress={() => setAlarmForm({ ...alarmForm, days })}
+                  >
+                    <Text style={[styles.chipText, on && styles.chipTextActive]}>{name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {alarmForm.days.length === 0 ? (
+              <>
+                <View style={styles.chipsWrapRow}>
+                  <TouchableOpacity
+                    style={[styles.chip, styles.chipSpaced, !!alarmForm.date && styles.chipActive]}
+                    onPress={() => pickDate(alarmForm.date, (d) => setAlarmForm((f) => (f ? { ...f, date: d } : f)))}
+                  >
+                    <Text style={[styles.chipText, !!alarmForm.date && styles.chipTextActive]}>
+                      📅 {alarmForm.date ? displayYMD(alarmForm.date) : 'בחר תאריך'}
+                    </Text>
+                  </TouchableOpacity>
+                  {alarmForm.date ? (
+                    <TouchableOpacity
+                      style={[styles.chip, styles.chipSpaced]}
+                      onPress={() => setAlarmForm({ ...alarmForm, date: undefined })}
+                    >
+                      <Text style={styles.chipText}>✕ בלי תאריך</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                <Text style={styles.hintText}>
+                  {alarmForm.date ? 'השעון יצלצל פעם אחת בתאריך הזה.' : 'בלי תאריך: השעון יצלצל בפעם הקרובה שהשעה מגיעה.'}
+                </Text>
+              </>
+            ) : (
+              <>
+                <View style={styles.switchRowPlain}>
+                  <Text style={styles.label}>כל שבועיים</Text>
+                  <Switch
+                    trackColor={{ false: c.switchOff, true: c.accent }}
+                    thumbColor="#FFFFFF"
+                    value={!!alarmForm.everyOtherWeek}
+                    onValueChange={(v) =>
+                      setAlarmForm({ ...alarmForm, everyOtherWeek: v, weekAnchor: v ? alarmForm.weekAnchor ?? weekSunday(Date.now()) : undefined })
+                    }
+                  />
+                </View>
+                {alarmForm.everyOtherWeek ? (
+                  <View style={styles.chipsWrapRow}>
+                    {([0, 1] as const).map((w) => {
+                      const anchor = weekSunday(Date.now(), w);
+                      const on =
+                        alarmForm.weekAnchor !== undefined && (((alarmForm.weekAnchor - anchor) / 7) % 2 + 2) % 2 === 0;
+                      return (
+                        <TouchableOpacity
+                          key={w}
+                          style={[styles.chip, styles.chipSpaced, on && styles.chipActive]}
+                          onPress={() => setAlarmForm({ ...alarmForm, weekAnchor: anchor })}
+                        >
+                          <Text style={[styles.chipText, on && styles.chipTextActive]}>{w === 0 ? 'מהשבוע' : 'משבוע הבא'}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ) : null}
+
+                <View style={styles.switchRowPlain}>
+                  <Text style={styles.label}>לא לצלצל בחגים</Text>
+                  <Switch
+                    trackColor={{ false: c.switchOff, true: c.accent }}
+                    thumbColor="#FFFFFF"
+                    value={!!alarmForm.skipHolidays}
+                    onValueChange={(v) => setAlarmForm({ ...alarmForm, skipHolidays: v })}
+                  />
+                </View>
+                {alarmForm.skipHolidays ? (
+                  <Text style={styles.hintText}>
+                    לפי לוח השנה העברי: ראש השנה, יום כיפור, סוכות, שמחת תורה, פסח, שביעי של פסח, שבועות ויום העצמאות.
+                  </Text>
+                ) : null}
+              </>
+            )}
 
             <Text style={styles.label}>שם (לא חובה)</Text>
             <TextInput placeholderTextColor={c.muted}
@@ -1789,7 +1984,66 @@ function AppInner({
                 </Text>
               </>
             ) : null}
+            <Text style={styles.label}>איך עוצרים</Text>
+            <View style={styles.chipsWrapRow}>
+              {(
+                [
+                  ['none', 'לחיצה על עצור'],
+                  ['math', '🧮 תרגיל חשבון'],
+                  ['shake', '📳 ניעור'],
+                ] as ['none' | 'math' | 'shake', string][]
+              ).map(([ch, name]) => {
+                const on = (alarmForm.challenge ?? 'none') === ch;
+                return (
+                  <TouchableOpacity
+                    key={ch}
+                    style={[styles.chip, styles.chipSpaced, on && styles.chipActive]}
+                    onPress={() => pickChallenge(ch)}
+                  >
+                    <Text style={[styles.chipText, on && styles.chipTextActive]}>{name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {alarmForm.challenge && alarmForm.challenge !== 'none' ? (
+              <Text style={styles.hintText}>
+                {alarmForm.challenge === 'math'
+                  ? 'כדי לעצור צריך לפתור תרגיל חיבור. הנודניק זמין בלי תרגיל.'
+                  : 'כדי לעצור צריך לנער את הטלפון 15 פעמים. הנודניק זמין בלי ניעור.'}
+              </Text>
+            ) : null}
+
+            <View style={styles.switchRowPlain}>
+              <Text style={styles.label}>🔊 הקראה אחרי העצירה</Text>
+              <Switch
+                trackColor={{ false: c.switchOff, true: c.accent }}
+                thumbColor="#FFFFFF"
+                value={!!alarmForm.speak}
+                onValueChange={(v) => setAlarmForm({ ...alarmForm, speak: v })}
+              />
+            </View>
+            {alarmForm.speak ? (
+              <Text style={styles.hintText}>
+                אחרי שעוצרים, הטלפון אומר את היום, השעה והמשימות של היום. צריך קול בעברית בטלפון (בדרך כלל של גוגל).
+              </Text>
+            ) : null}
+
             <Text style={styles.hintText}>אם לא לוחצים כלום, השעון נעצר אחרי 10 דקות.</Text>
+
+            {!alarmFormIsNew && alarmForm.days.length > 0 && alarmForm.enabled ? (
+              <TouchableOpacity style={[styles.grayBtn, { marginTop: 10 }]} onPress={() => toggleSkipNext(alarmForm)}>
+                <Text style={styles.grayBtnText}>
+                  {alarmForm.skipNext && alarmForm.skipNext > Date.now()
+                    ? '↩️ בטל את הדילוג'
+                    : `⏭️ דלג על הצלצול הקרוב (${ringDayText(alarmPlainNext({ ...alarmForm, skipNext: undefined }))})`}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {!alarmFormIsNew ? (
+              <TouchableOpacity style={[styles.grayBtn, { marginTop: 10 }]} onPress={() => duplicateAlarm(alarmForm)}>
+                <Text style={styles.grayBtnText}>📄 שכפל שעון</Text>
+              </TouchableOpacity>
+            ) : null}
 
             <View style={styles.actionRow}>
               <TouchableOpacity style={styles.greenBtn} onPress={saveAlarmForm}>

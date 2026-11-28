@@ -27,6 +27,10 @@ export interface RingSpec {
   minute: number;
   endAt?: number; // repeating rings stop after this time (0/undefined = never)
   silent?: boolean; // ordinary notification instead of a full-screen ring
+  weekAnchor?: number; // every other week: epoch-day of a ringing week's Sunday (0/undefined = every week)
+  skipHolidays?: boolean; // skip Israeli holidays when repeating
+  challenge?: 'none' | 'math' | 'shake'; // needed to stop the ring
+  speak?: boolean; // read aloud the time and today's tasks after stopping
 }
 
 export interface MoveResult {
@@ -67,6 +71,9 @@ type GeoAlarmNative = {
   quietNotifications(taskName: string): void;
   cancelRing(id: string): void;
   getScheduledRingIds(): string[];
+  computeNextRing(json: string, from: number): number;
+  holidayName(at: number): string;
+  setAgenda(json: string): void;
   getSoundTitle(uri: string | null): string;
   listDocuments(uri: string): Promise<DocEntry[]>;
   documentFolderName(uri: string): string;
@@ -154,6 +161,13 @@ export const GeoAlarm = {
   scheduleRing: (spec: RingSpec) => safe(() => native!.scheduleRing(JSON.stringify(spec)), undefined),
   cancelRing: (id: string) => safe(() => native!.cancelRing(id), undefined),
   getScheduledRingIds: () => safe(() => native!.getScheduledRingIds(), [] as string[]),
+  /** Next ring time after `from` for a repeating spec (days, every other week, holidays); 0 when unavailable. */
+  computeNextRing: (spec: Pick<RingSpec, 'hour' | 'minute' | 'daysMask' | 'weekAnchor' | 'skipHolidays'>, from: number) =>
+    safe(() => native!.computeNextRing(JSON.stringify(spec), from), 0),
+  /** Hebrew name of the Israeli holiday on that day, or ''. */
+  holidayName: (at: number) => safe(() => native!.holidayName(at), ''),
+  /** Today's (and the next days') open tasks, read aloud by alarms that speak. */
+  setAgenda: (json: string) => safe(() => native!.setAgenda(json), undefined),
   listDocuments: async (uri: string): Promise<DocEntry[] | null> => {
     try {
       return native ? await native.listDocuments(uri) : [];

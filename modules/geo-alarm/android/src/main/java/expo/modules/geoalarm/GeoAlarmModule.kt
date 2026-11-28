@@ -132,6 +132,19 @@ class GeoAlarmModule : Module() {
       RingScheduler.ids(context)
     }
 
+    Function("computeNextRing") { json: String, from: Double ->
+      RingScheduler.computeNext(JSONObject(json), from.toLong()).toDouble()
+    }
+
+    Function("holidayName") { at: Double ->
+      Holidays.nameAt(at.toLong())
+    }
+
+    Function("setAgenda") { json: String ->
+      WakeSpeech.saveAgenda(context, json)
+      Unit
+    }
+
     AsyncFunction("listDocuments") { uri: String ->
       DocumentsHelper.list(context, uri)
     }

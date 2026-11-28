@@ -200,7 +200,10 @@ object AlarmNotifier {
       .setTimeoutAfter(durationMs)
       .setSound(sound, AudioManager.STREAM_ALARM)
       .setVibrate(longArrayOf(0, 800, 600, 800, 600))
-      .addAction(0, "עצור", stopPi)
+
+    // An alarm with a wake-up challenge is stopped only on its screen (tapping the notification opens it).
+    val challenge = ring.optString("kind") == "alarm" && ring.optString("challenge", "none") != "none"
+    if (challenge) builder.addAction(0, "פתח כדי לעצור", fullScreenPi) else builder.addAction(0, "עצור", stopPi)
 
     if (canSnooze(ring)) {
       val snoozeIntent = Intent(context, AlarmStopReceiver::class.java).apply {
