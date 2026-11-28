@@ -48,6 +48,13 @@ export interface DocEntry {
 }
 
 /** A rendered preview picture (cached JPEG). */
+export interface UprightResult {
+  uri: string | null;
+  turned: number;
+  /** short report of what the check saw (temporary, shown in the save window) */
+  diag: string;
+}
+
 export interface PreviewPic {
   uri: string;
   width: number;
@@ -90,7 +97,7 @@ type GeoAlarmNative = {
   moveDocument(src: string, srcParent: string, destFolder: string): Promise<MoveResult>;
   rotatePdf(uri: string, degrees: number): Promise<boolean>;
   rotatePdfPages(uri: string, degrees: number[]): Promise<string | null>;
-  uprightScan(uri: string): Promise<{ uri: string; turned: number } | null>;
+  uprightScan(uri: string): Promise<UprightResult>;
   combinePdf(uris: string[], mimes: string[], quality: string, overwrite: string | null): Promise<string | null>;
   getInitialSharedFiles(): Promise<SharedFile[]>;
   pickContact(): Promise<{ name: string; phone: string } | null>;
@@ -316,12 +323,12 @@ export const GeoAlarm = {
       return null;
     }
   },
-  /** Sets upside-down (Hebrew) scan pages right, by reading them both ways. null = nothing turned. */
-  uprightScan: async (uri: string): Promise<{ uri: string; turned: number } | null> => {
+  /** Sets upside-down (Hebrew) scan pages right, by reading them both ways. uri = null: nothing turned. */
+  uprightScan: async (uri: string): Promise<UprightResult> => {
     try {
-      return native ? await native.uprightScan(uri) : null;
-    } catch {
-      return null;
+      return native ? await native.uprightScan(uri) : { uri: null, turned: 0, diag: 'אין מודול' };
+    } catch (e: any) {
+      return { uri: null, turned: 0, diag: 'שגיאה: ' + String(e?.message ?? e) };
     }
   },
   /**

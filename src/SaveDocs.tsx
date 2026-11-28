@@ -31,7 +31,7 @@ export interface SaveRequest {
   /** several PDFs / images: offer "one PDF" */
   mergeable?: boolean;
   /** a fresh scan (one PDF): show its pages, a tap turns a page upside down. turned = pages already set right automatically */
-  pagesFlip?: { turned: number };
+  pagesFlip?: { turned: number; diag?: string };
 }
 
 /** Pages shown in the save window of a scan (tap to turn). */
@@ -67,6 +67,7 @@ export function useSaveDocs() {
   const [busyText, setBusyText] = useState<string | null>(null);
   const [thumbs, setThumbs] = useState<(PreviewPic | null)[]>([]);
   const [turns, setTurns] = useState<number[]>([]);
+  const [thumbDiag, setThumbDiag] = useState('');
   // card scan: after the front side, offer (not force) the back side
   const [sideAsk, setSideAsk] = useState<((back: boolean) => void) | null>(null);
   const resolver = useRef<((r: DocLink[] | null) => void) | null>(null);
@@ -93,13 +94,16 @@ export function useSaveDocs() {
     setSaving(false);
     setThumbs([]);
     setTurns([]);
+    setThumbDiag('');
     setReq(r);
     const f0 = r.files[0];
     if (r.pagesFlip && r.files.length === 1 && f0.mime.includes('pdf')) {
       (async () => {
-        const n = Math.min(await GeoAlarm.pdfPageCount(f0.src), FLIP_PAGES);
+        const count = await GeoAlarm.pdfPageCount(f0.src);
+        const n = Math.min(count, FLIP_PAGES);
         const pics: (PreviewPic | null)[] = [];
         for (let i = 0; i < n; i++) pics.push(await GeoAlarm.renderPdfPage(f0.src, i, 220, Date.now()));
+        setThumbDiag(`עמודים: ${count}, תמונות: ${pics.filter(Boolean).length}`);
         setThumbs(pics);
         setTurns(pics.map(() => 0));
       })();
@@ -220,6 +224,13 @@ export function useSaveDocs() {
             ))}
             {files.length > 8 ? <Text style={styles.hint}>ועוד {files.length - 8}…</Text> : null}
           </View>
+        ) : null}
+
+        {req?.pagesFlip?.diag !== undefined ? (
+          <Text style={styles.diag}>
+            🧪 בדיקת היפוך – {req.pagesFlip.diag || 'אין תוצאה'}
+            {thumbDiag ? ` · ${thumbDiag}` : ' · טוען תמונות…'}
+          </Text>
         ) : null}
 
         {thumbs.length ? (
@@ -387,7 +398,7 @@ export async function scanAndSave(
   }
   // Google's scanner sometimes turns Hebrew pages upside down: set them right by reading them both ways.
   const up = await s.busy('⏳ בודק שאין עמודים הפוכים…', () => GeoAlarm.uprightScan(r!.uri));
-  const base = up?.uri ?? r.uri;
+  const base = up.uri ?? r.uri;
   let src = base;
   if (opts?.card && r.pages >= 2) {
     const one = await s.busy('⏳ מסדר את שני הצדדים בעמוד אחד…', () => GeoAlarm.cardOnePage(base));
@@ -400,7 +411,7 @@ export async function scanAndSave(
     title: opts?.card ? '🪪 שמירת הכרטיס' : '📷 שמירת הסריקה',
     files: [{ src, name: (name || suggest.name || (opts?.card ? 'כרטיס' : scanName())) + '.pdf', mime: 'application/pdf' }],
     folder,
-    pagesFlip: { turned: up?.turned ?? 0 },
+    pagesFlip: { turned: up.turned, diag: up.diag },
   });
   const d = saved?.[0];
   return d ? { ...d, suggest } : null;
@@ -441,6 +452,7 @@ const makeStyles = (c: Palette) => ({
     borderColor: c.border,
     backgroundColor: c.card,
   },
+  diag: { fontSize: 12, color: c.text, backgroundColor: c.subtle, padding: 6, borderRadius: 8, marginTop: 6 },
   thumbText: { fontSize: 11.5, color: c.text, marginTop: 4 },
   fileList: { gap: 4, marginBottom: 6 },
   fileLine: { fontSize: 14, color: c.text },

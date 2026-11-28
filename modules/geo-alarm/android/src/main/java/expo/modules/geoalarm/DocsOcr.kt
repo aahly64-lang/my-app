@@ -110,16 +110,20 @@ object DocsOcr {
    * of the page; a page that reads clearly better turned is set right. Returns the new file's uri and how
    * many pages were turned, or null when nothing needed turning (or the check couldn't run).
    */
-  fun upright(ctx: Context, uriStr: String): Map<String, Any?>? {
-    val path = dataPath(ctx) ?: return null
+  fun upright(ctx: Context, uriStr: String): Map<String, Any?> {
+    // diag: a short report shown (temporarily) in the save window, to see on the phone what happened
+    fun res(uri: String?, turned: Int, diag: String) = mapOf("uri" to uri, "turned" to turned, "diag" to diag)
+    val path = dataPath(ctx) ?: return res(null, 0, "קובצי השפה לא נטענו")
     val tmp = File(ctx.cacheDir, "upr-${System.currentTimeMillis()}.pdf")
     val turn = ArrayList<Int>()
+    val scores = ArrayList<String>()
     try {
-      ctx.contentResolver.openInputStream(Uri.parse(uriStr))?.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } } ?: return null
+      ctx.contentResolver.openInputStream(Uri.parse(uriStr))?.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } }
+        ?: return res(null, 0, "לא הצלחתי לפתוח את הסריקה")
       synchronized(lock) {
         val tess = TessBaseAPI()
         try {
-          if (!tess.init(path, "heb")) return null
+          if (!tess.init(path, "heb")) return res(null, 0, "מנוע הקריאה לא עלה")
           ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
             PdfRenderer(pfd).use { r ->
               val rotations = ScanEnhancer.pageRotations(tmp, r.pageCount) ?: IntArray(r.pageCount)
@@ -131,6 +135,7 @@ object DocsOcr {
                 band.recycle()
                 flipped.recycle()
                 turn.add(if (turned >= 45 && turned - asIs >= 15) 180 else 0)
+                scores.add("עמוד ${i + 1}: ישר $asIs / הפוך $turned")
               }
             }
           }
@@ -139,14 +144,15 @@ object DocsOcr {
         }
       }
     } catch (e: Throwable) {
-      return null
+      return res(null, 0, "שגיאה: ${e.javaClass.simpleName} ${e.message ?: ""}".trim() + (if (scores.isEmpty()) "" else " · " + scores.joinToString(" · ")))
     } finally {
       tmp.delete()
     }
+    val diag = if (scores.isEmpty()) "אין עמודים" else scores.joinToString(" · ")
     val count = turn.count { it != 0 }
-    if (count == 0) return null
-    val out = ScanEnhancer.rotatePages(ctx, uriStr, turn) ?: return null
-    return mapOf("uri" to out, "turned" to count)
+    if (count == 0) return res(null, 0, diag)
+    val out = ScanEnhancer.rotatePages(ctx, uriStr, turn) ?: return res(null, 0, "$diag · ההפיכה נכשלה")
+    return res(out, count, diag)
   }
 
   /** The page (with its /Rotate applied), about 1800px on the long side, gray, cut to the middle half. */
