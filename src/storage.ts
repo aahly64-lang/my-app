@@ -458,6 +458,10 @@ export const SCAN_QUALITY_KEY = '@avi_scan_quality_v1';
 export type ScanQuality = 'small' | 'normal' | 'high' | 'original';
 export const loadScanQuality = async () => ((await readJson<string>(SCAN_QUALITY_KEY)) as ScanQuality | null) ?? 'normal';
 export const saveScanQuality = (q: ScanQuality) => writeJson(SCAN_QUALITY_KEY, q);
+const SCAN_TIP_OFF_KEY = '@avi_scan_tip_off_v1';
+/** "Upside down? easy to flip at the end" popup before scanning, until "don't show again". */
+export const loadScanTipOff = async () => (await readJson<boolean>(SCAN_TIP_OFF_KEY)) === true;
+export const saveScanTipOff = () => writeJson(SCAN_TIP_OFF_KEY, true);
 
 export const DOC_BASE_KEY = '@avi_doc_base_v1';
 /** The phone folder (picked once, normally "Documents") in which "📁 צור תיקייה" creates folders. */

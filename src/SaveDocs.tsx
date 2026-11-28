@@ -12,6 +12,8 @@ import {
   loadDocFolders,
   loadDocSaveFolder,
   loadScanQuality,
+  loadScanTipOff,
+  saveScanTipOff,
   isDriveUri,
   saveDocFolders,
   saveDocSaveFolder,
@@ -245,12 +247,20 @@ export function useSaveDocs() {
         {thumbs.length ? (
           <>
             <Text style={styles.label}>העמודים</Text>
-            <Text style={styles.hint}>
+            <Text style={styles.flipHint}>
               {req?.pagesFlip?.turned
-                ? `🔄 ${req.pagesFlip.turned === 1 ? 'עמוד אחד היה הפוך ותוקן' : `${req.pagesFlip.turned} עמודים היו הפוכים ותוקנו`} לבד. `
+                ? `🔄 ${req.pagesFlip.turned === 1 ? 'עמוד אחד היה הפוך ותוקן' : `${req.pagesFlip.turned} עמודים היו הפוכים ותוקנו`} לבד.\n`
                 : ''}
-              עמוד הפוך? הקש עליו כדי להפוך אותו.
+              עמוד הפוך? לחץ עליו והוא יתהפך.
             </Text>
+            {thumbs.length > 1 ? (
+              <TouchableOpacity
+                style={styles.flipAllBtn}
+                onPress={() => setTurns((a) => (a.every((v) => v) ? a.map(() => 0) : a.map(() => 180)))}
+              >
+                <Text style={styles.flipBtnText}>🔄 הפוך את כל העמודים</Text>
+              </TouchableOpacity>
+            ) : null}
             <View style={styles.chipsWrap}>
               {thumbs.map((t, i) =>
                 t ? (
@@ -261,9 +271,17 @@ export function useSaveDocs() {
                   >
                     <Image
                       source={{ uri: t.uri }}
-                      style={{ width: 70, height: Math.round((70 * t.height) / t.width), transform: [{ rotate: turns[i] ? '180deg' : '0deg' }] }}
+                      style={{
+                        width: thumbs.length === 1 ? 150 : 100,
+                        height: Math.round(((thumbs.length === 1 ? 150 : 100) * t.height) / t.width),
+                        transform: [{ rotate: turns[i] ? '180deg' : '0deg' }],
+                      }}
                     />
-                    <Text style={styles.thumbText}>{turns[i] ? '🔄 יתהפך' : `${i + 1} · 🔄 הפוך`}</Text>
+                    <View style={[styles.flipBtn, !!turns[i] && styles.flipBtnOn]}>
+                      <Text style={[styles.flipBtnText, !!turns[i] && styles.flipBtnTextOn]}>
+                        {turns[i] ? '✓ יתהפך' : thumbs.length > 1 ? `🔄 הפוך (${i + 1})` : '🔄 הפוך'}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 ) : null
               )}
@@ -378,12 +396,29 @@ export type ScannedDoc = DocLink & { suggest: OcrSuggestion };
  * then ask for a name and a folder. card = front and back of a card on one page.
  * Returns the saved document with the suggestions, or null (cancelled / no folder / scanner not available).
  */
+/** Before scanning: Google's scanner may turn a Hebrew page upside down; tell the user it's easy to fix at the end. */
+async function scanTip() {
+  if (await loadScanTipOff()) return;
+  await new Promise<void>((done) =>
+    Alert.alert(
+      '📷 סריקת מסמך',
+      'אם דף יוצא הפוך – אין מה לדאוג.\nבסוף, בחלון השמירה, לוחצים על העמוד והוא מתהפך. שם גם נותנים לו שם.',
+      [
+        { text: 'אל תציג שוב', onPress: () => { saveScanTipOff(); done(); } },
+        { text: 'הבנתי', onPress: () => done() },
+      ],
+      { cancelable: true, onDismiss: () => done() }
+    )
+  );
+}
+
 export async function scanAndSave(
   s: SaveDocs,
   folder?: DocFolder,
   name?: string,
   opts?: { card?: boolean }
 ): Promise<ScannedDoc | null> {
+  await scanTip();
   const quality = await loadScanQuality();
   const scanOnce = async (limit: number) => {
     try {
@@ -462,7 +497,28 @@ const makeStyles = (c: Palette) => ({
     backgroundColor: c.card,
   },
   diag: { fontSize: 12, color: c.text, backgroundColor: c.subtle, padding: 6, borderRadius: 8, marginTop: 6 },
-  thumbText: { fontSize: 11.5, color: c.text, marginTop: 4 },
+  flipHint: { fontSize: 15, color: c.text, fontWeight: '700' as const, marginBottom: 8 },
+  flipBtn: {
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: c.accent,
+    alignSelf: 'stretch' as const,
+    alignItems: 'center' as const,
+  },
+  flipBtnOn: { backgroundColor: c.accent },
+  flipBtnText: { fontSize: 14, color: c.text, fontWeight: '700' as const },
+  flipBtnTextOn: { color: c.onAccent },
+  flipAllBtn: {
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: c.accent,
+    alignItems: 'center' as const,
+    marginBottom: 8,
+  },
   fileList: { gap: 4, marginBottom: 6 },
   fileLine: { fontSize: 14, color: c.text },
   saveBtn: {
