@@ -306,6 +306,10 @@ export const saveThemeMode = (m: string) => writeJson(THEME_KEY, m);
 export const ACCENT_KEY = '@avi_accent_v1';
 export const loadAccent = async () => (await readJson<string>(ACCENT_KEY)) ?? 'yellow';
 export const saveAccent = (k: string) => writeJson(ACCENT_KEY, k);
+export const BG_KEY = '@avi_bg_v1';
+/** 'default' (white / black in dark mode) or a hex color. */
+export const loadBg = async () => (await readJson<string>(BG_KEY)) ?? 'default';
+export const saveBg = (k: string) => writeJson(BG_KEY, k);
 export const loadGroups = () => readJson<WorkoutGroup[]>(GROUPS_KEY);
 export const saveGroups = (g: WorkoutGroup[]) => writeJson(GROUPS_KEY, g);
 export const loadTasks = async () => (await readJson<Task[]>(TASKS_KEY)) ?? [];

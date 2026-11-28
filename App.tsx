@@ -74,6 +74,7 @@ async function gatherBackup(): Promise<BackupData> {
     sounds: await loadSounds(),
     themeMode: await loadThemeMode(),
     accent: await loadAccent(),
+    bg: await loadBg(),
     journals: await loadJournals(),
     taskLists: await loadTaskLists(),
     taskTemplates: await loadTaskTemplates(),
@@ -127,6 +128,8 @@ import {
   loadSounds,
   loadTasks,
   loadThemeMode,
+  loadBg,
+  saveBg,
   loadAccent,
   saveAccent,
   loadJournals,
@@ -351,11 +354,29 @@ export default function App() {
     setAccentState(k);
     saveAccent(k);
   };
-  const dark = themeMode === 'dark' || (themeMode === 'auto' && system === 'dark');
+  const [bg, setBgState] = useState('default');
+  useEffect(() => {
+    loadBg().then(setBgState);
+  }, []);
+  const setBg = (k: string) => {
+    setBgState(k);
+    saveBg(k);
+  };
+  const modeDark = themeMode === 'dark' || (themeMode === 'auto' && system === 'dark');
+  const palette = paletteFor(modeDark, accent, bg);
+  const dark = palette.dark; // a custom background decides light/dark by itself
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeContext.Provider value={paletteFor(dark, accent)}>
-        <AppInner themeMode={themeMode} setThemeMode={setThemeMode} dark={dark} accent={accent} setAccent={setAccent} />
+      <ThemeContext.Provider value={palette}>
+        <AppInner
+          themeMode={themeMode}
+          setThemeMode={setThemeMode}
+          dark={dark}
+          accent={accent}
+          setAccent={setAccent}
+          bg={bg}
+          setBg={setBg}
+        />
       </ThemeContext.Provider>
     </GestureHandlerRootView>
   );
@@ -367,12 +388,16 @@ function AppInner({
   dark,
   accent,
   setAccent,
+  bg,
+  setBg,
 }: {
   themeMode: ThemeMode;
   setThemeMode: (m: ThemeMode) => void;
   dark: boolean;
   accent: string;
   setAccent: (k: string) => void;
+  bg: string;
+  setBg: (k: string) => void;
 }) {
   const styles = useAppStyles();
   const c = useTheme();
@@ -1148,6 +1173,7 @@ function AppInner({
         await saveSounds(data.sounds);
         if (data.themeMode) setThemeMode(data.themeMode as ThemeMode);
         if (data.accent) setAccent(data.accent);
+        if (data.bg) setBg(data.bg);
         if (data.journals) await saveJournals(data.journals);
         if (data.taskLists) await saveTaskLists(data.taskLists);
         if (data.taskTemplates) await saveTaskTemplates(data.taskTemplates);
@@ -1375,7 +1401,7 @@ function AppInner({
                     </Text>
                   </TouchableOpacity>
                   <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
+                trackColor={{ false: c.switchOff, true: c.accent }}
                 thumbColor="#FFFFFF" value={a.enabled} onValueChange={() => toggleAlarm(a)} />
                 </View>
               ))}
@@ -1433,7 +1459,7 @@ function AppInner({
                     ) : null}
                   </TouchableOpacity>
                   <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
+                trackColor={{ false: c.switchOff, true: c.accent }}
                 thumbColor="#FFFFFF" value={a.enabled} onValueChange={() => toggleArea(a)} />
                 </View>
               ))}
@@ -1722,7 +1748,7 @@ function AppInner({
             <View style={styles.switchRowPlain}>
               <Text style={styles.label}>נודניק</Text>
               <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
+                trackColor={{ false: c.switchOff, true: c.accent }}
                 thumbColor="#FFFFFF"
                 value={alarmForm.snoozeEnabled}
                 onValueChange={(v) => setAlarmForm({ ...alarmForm, snoozeEnabled: v })}
@@ -1865,6 +1891,8 @@ function AppInner({
         onThemeMode={setThemeMode}
         accent={accent}
         onAccent={setAccent}
+        bg={bg}
+        onBg={setBg}
       />
       </WhenOpen>
     </SafeAreaView>

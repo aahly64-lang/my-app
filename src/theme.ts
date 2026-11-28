@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo } from 'react';
 import { StyleSheet } from 'react-native';
+import { contrast, ensureContrast, isHex, mix, textOn } from './colorUtil';
 
 // Visual theme "גרפיט וצהוב" (approved by Avi, 21/11/2026): graphite surfaces, yellow accent,
 // Heebo font. Only looks live here – no app logic.
@@ -46,11 +47,14 @@ export interface Palette {
   primary: string; // strong neutral (graphite in light, white in dark)
   onPrimary: string;
   overlay: string;
+  cardEdge: string; // thin frame around cards (light backgrounds, so white cards don't vanish on white)
+  accentOnPrimary: string; // accent-colored text on the `primary` surface (snackbar "undo")
+  switchOff: string; // track of a switch that is off
 }
 
 export const LIGHT: Palette = {
   dark: false,
-  bg: '#F2F2F4',
+  bg: '#FFFFFF',
   card: '#FFFFFF',
   subtle: '#F4F4F6',
   subtle2: '#E9E9ED',
@@ -88,6 +92,9 @@ export const LIGHT: Palette = {
   primary: '#1C1C1E',
   onPrimary: '#FFFFFF',
   overlay: 'rgba(0, 0, 0, 0.45)',
+  cardEdge: '#E4E4E9',
+  accentOnPrimary: '#FFD60A',
+  switchOff: '#D1D1D6',
 };
 
 export const DARK: Palette = {
@@ -130,6 +137,9 @@ export const DARK: Palette = {
   primary: '#F5F5F7',
   onPrimary: '#111113',
   overlay: 'rgba(0, 0, 0, 0.65)',
+  cardEdge: 'transparent',
+  accentOnPrimary: '#7A5F00',
+  switchOff: '#3A3A3C',
 };
 
 export const ThemeContext = createContext<Palette>(LIGHT);
@@ -258,16 +268,145 @@ export const ACCENTS: { key: string; name: string; light: AccentSet; dark: Accen
   },
 ];
 
+// ---------------------------------------------------------------- background presets (1.17.0)
+
+/** 'default' = plain white (or black in dark mode). Any other value is a hex color. */
+export const BACKGROUNDS: { key: string; name: string; color: string }[] = [
+  { key: 'default', name: 'לבן', color: '#FFFFFF' },
+  { key: '#FFF8E7', name: 'שמנת', color: '#FFF8E7' },
+  { key: '#EDF7EE', name: 'ירקרק', color: '#EDF7EE' },
+  { key: '#EAF3FC', name: 'תכלת', color: '#EAF3FC' },
+  { key: '#FCEEF3', name: 'ורדרד', color: '#FCEEF3' },
+  { key: '#F1EDFB', name: 'לבנדר', color: '#F1EDFB' },
+  { key: '#EEEEF1', name: 'אפור', color: '#EEEEF1' },
+  { key: '#141B2D', name: 'כחול לילה', color: '#141B2D' },
+  { key: '#10211A', name: 'ירוק כהה', color: '#10211A' },
+];
+
+const DARK_TEXT = '#111113';
+const LIGHT_TEXT = '#F5F5F7';
+
+/** Does this background give a dark (white-text) screen? */
+export function bgIsDark(hex: string): boolean {
+  return contrast(LIGHT_TEXT, hex) > contrast(DARK_TEXT, hex);
+}
+
+/**
+ * The background actually used: nudged lighter (or darker) until the text on it is clearly
+ * readable, so no color choice can make the app unreadable.
+ */
+export function readableBg(hex: string): string {
+  if (!isHex(hex)) return '#FFFFFF';
+  return bgIsDark(hex) ? ensureContrast(hex, [LIGHT_TEXT], 9, '#000000') : ensureContrast(hex, [DARK_TEXT], 9, '#FFFFFF');
+}
+
+/** The button color for an accent setting (preset key or custom hex). */
+export function accentColorFor(accentKey: string | undefined, dark: boolean): string {
+  if (isHex(accentKey)) return accentKey.toUpperCase();
+  const a = ACCENTS.find((x) => x.key === accentKey) ?? ACCENTS[0];
+  return dark ? a.dark.accent : a.light.accent;
+}
+
+/** True when the buttons would almost melt into the background. */
+export function accentTooClose(accent: string, bg: string): boolean {
+  return contrast(accent, bg) < 1.3;
+}
+
+/** A version of the accent that stands out from the background (for the "fix" button). */
+export function accentFixed(accent: string, bg: string): string {
+  return ensureContrast(accent, [bg], 2.2, bgIsDark(bg) ? '#FFFFFF' : '#000000');
+}
+
+function surfacesFor(base: Palette, bg: string): Partial<Palette> {
+  const t = base.text;
+  if (base.dark) {
+    const card = mix(bg, '#FFFFFF', 0.08);
+    const subtle = mix(bg, '#FFFFFF', 0.15);
+    return {
+      bg,
+      card,
+      subtle,
+      subtle2: mix(bg, '#FFFFFF', 0.21),
+      border: subtle,
+      borderSoft: mix(bg, '#FFFFFF', 0.11),
+      seg: card,
+      note: card,
+      noteDone: mix(bg, '#000000', 0.35),
+      noteLight: card,
+      noteInput: subtle,
+      noteBox: subtle,
+      noteLine: subtle,
+      checkLine: mix(bg, '#FFFFFF', 0.35),
+      cardEdge: 'transparent',
+      switchOff: mix(bg, '#FFFFFF', 0.22),
+    };
+  }
+  const card = mix(bg, '#FFFFFF', 0.7);
+  const subtle = mix(card, t, 0.04);
+  return {
+    bg,
+    card,
+    subtle,
+    subtle2: mix(card, t, 0.085),
+    border: mix(bg, t, 0.11),
+    borderSoft: mix(bg, t, 0.065),
+    seg: mix(bg, t, 0.08),
+    note: card,
+    noteDone: mix(bg, t, 0.07),
+    noteLight: card,
+    noteInput: subtle,
+    noteBox: subtle,
+    noteLine: mix(card, t, 0.1),
+    checkLine: mix(card, t, 0.25),
+    cardEdge: mix(bg, t, 0.1),
+    switchOff: mix(bg, t, 0.18),
+  };
+}
+
+/** Accent tokens worked out from any button color, kept readable on the given palette. */
+function accentFrom(p: Palette, accent: string): Partial<Palette> {
+  const toward = p.dark ? '#FFFFFF' : DARK_TEXT;
+  const accentText = ensureContrast(accent, [p.bg, p.card], 4.5, toward);
+  const accentSoft = mix(p.bg, accent, p.dark ? 0.24 : 0.17);
+  return {
+    accent,
+    onAccent: textOn(accent),
+    accentText,
+    link: accentText,
+    accentSoft,
+    onAccentSoft: ensureContrast(accent, [accentSoft], 4.5, toward),
+  };
+}
+
 const paletteCache: Record<string, Palette> = {};
 
-/** The light or dark palette with the chosen accent color applied. */
-export function paletteFor(dark: boolean, accentKey?: string): Palette {
-  const key = `${dark ? 'd' : 'l'}:${accentKey ?? 'yellow'}`;
+/**
+ * The palette for the chosen mode, button color (preset key or hex) and background
+ * ('default' or hex). A custom background decides by itself whether the app is light or dark.
+ */
+export function paletteFor(dark: boolean, accentKey?: string, bgKey?: string): Palette {
+  const customBg = isHex(bgKey) ? readableBg(bgKey) : null;
+  const isDark = customBg ? bgIsDark(customBg) : dark;
+  const key = `${isDark ? 'd' : 'l'}:${accentKey ?? 'yellow'}:${customBg ?? '-'}`;
   if (!paletteCache[key]) {
-    const a = ACCENTS.find((x) => x.key === accentKey) ?? ACCENTS[0];
-    const base = dark ? DARK : LIGHT;
-    const set = dark ? a.dark : a.light;
-    paletteCache[key] = a.key === 'yellow' ? base : { ...base, ...set, warnBg: base.warnBg, warnText: base.warnText };
+    const base0 = isDark ? DARK : LIGHT;
+    let p: Palette = base0;
+    if (customBg) {
+      p = { ...base0, ...surfacesFor(base0, customBg) };
+      p = {
+        ...p,
+        muted: ensureContrast(base0.muted, [p.bg, p.card], 4.5, base0.text),
+        text2: ensureContrast(base0.text2, [p.bg, p.card], 7, base0.text),
+      };
+    }
+    const preset = ACCENTS.find((x) => x.key === accentKey);
+    if (customBg || isHex(accentKey)) {
+      p = { ...p, ...accentFrom(p, accentColorFor(accentKey, isDark)) };
+    } else if (preset && preset.key !== 'yellow') {
+      p = { ...p, ...(isDark ? preset.dark : preset.light) };
+    }
+    p = { ...p, accentOnPrimary: ensureContrast(p.accent, [p.primary], 3, p.onPrimary) };
+    paletteCache[key] = p;
   }
   return paletteCache[key];
 }

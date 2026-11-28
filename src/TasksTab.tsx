@@ -819,7 +819,7 @@ function TasksTab({ dataVersion, onCountChange, onConvertToNote, openTaskId, onO
             <View style={styles.switchRowPlain}>
               <Text style={styles.label}>⭐ חשובה</Text>
               <Switch
-                trackColor={{ false: c.dark ? "#3A3A3C" : "#D1D1D6", true: c.accent }}
+                trackColor={{ false: c.switchOff, true: c.accent }}
                 thumbColor="#FFFFFF" value={!!edit.star} onValueChange={(v) => setEdit({ ...edit, star: v })} />
             </View>
 
@@ -1184,7 +1184,7 @@ function TasksTab({ dataVersion, onCountChange, onConvertToNote, openTaskId, onO
         <View style={styles.switchRowPlain}>
           <Text style={styles.label}>☀️ סיכום בוקר</Text>
           <Switch
-            trackColor={{ false: c.dark ? '#3A3A3C' : '#D1D1D6', true: c.accent }}
+            trackColor={{ false: c.switchOff, true: c.accent }}
             thumbColor="#FFFFFF"
             value={morning.enabled}
             onValueChange={(v) => {

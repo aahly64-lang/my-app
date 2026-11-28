@@ -20,7 +20,21 @@ import { DriveBackupConfig, listDriveBackups } from './driveBackup';
 import { GeoAlarm } from '../modules/geo-alarm';
 import { ringNow } from './rings';
 import { displayYMD } from './pickers';
-import { ACCENTS, Palette, ThemeMode, cardShadow, useTheme, withFonts } from './theme';
+import {
+  ACCENTS,
+  BACKGROUNDS,
+  Palette,
+  ThemeMode,
+  accentColorFor,
+  accentFixed,
+  accentTooClose,
+  cardShadow,
+  paletteFor,
+  useTheme,
+  withFonts,
+} from './theme';
+import { isHex } from './colorUtil';
+import { ColorPicker } from './ColorPicker';
 import { SoundKind, SoundSettings, loadSounds, saveSounds } from './storage';
 
 const TAB_NAMES: Record<string, string> = {
@@ -59,6 +73,43 @@ interface Props {
   onThemeMode: (m: ThemeMode) => void;
   accent: string;
   onAccent: (k: string) => void;
+  bg: string;
+  onBg: (k: string) => void;
+}
+
+/** A tiny sample of the app (button, task card, note) drawn with a given palette. */
+function ThemeSample({ p }: { p: Palette }) {
+  return (
+    <View style={{ backgroundColor: p.bg, padding: 12, gap: 8 }}>
+      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+        <View style={{ backgroundColor: p.accent, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 9 }}>
+          <Text style={{ color: p.onAccent, fontWeight: '700', fontSize: 14 }}>+ משימה חדשה</Text>
+        </View>
+        <Text style={{ color: p.accentText, fontSize: 13, fontWeight: '700' }}>קישור</Text>
+      </View>
+      <View
+        style={{
+          backgroundColor: p.card,
+          borderRadius: 12,
+          padding: 10,
+          borderWidth: 1,
+          borderColor: p.cardEdge === 'transparent' ? p.border : p.cardEdge,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <View style={{ width: 20, height: 20, borderRadius: 6, borderWidth: 1.5, borderColor: p.checkLine }} />
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: p.text, fontSize: 14, fontWeight: '600' }}>לקנות חלב</Text>
+          <Text style={{ color: p.muted, fontSize: 12 }}>היום · 18:00</Text>
+        </View>
+        <Text style={{ color: p.onAccentSoft, backgroundColor: p.accentSoft, fontSize: 11, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, overflow: 'hidden' }}>
+          תזכורת
+        </Text>
+      </View>
+    </View>
+  );
 }
 
 function useStyles() {
@@ -164,7 +215,10 @@ export default function SetupScreen({
   onThemeMode,
   accent,
   onAccent,
+  bg,
+  onBg,
 }: Props) {
+  const [picker, setPicker] = useState<null | 'accent' | 'bg'>(null);
   const frame = useScreenFrame();
   const [autoList, setAutoList] = useState<{ uri: string; date: string }[] | null>(null);
   const [driveList, setDriveList] = useState<{ id: string; date: string }[] | null>(null);
@@ -269,24 +323,34 @@ export default function SetupScreen({
         </View>
         <ScrollView contentContainerStyle={[styles.content, { paddingBottom: frame.bottomSpace }]}>
           <Text style={styles.section}>מראה</Text>
-          <View style={styles.themeRow}>
+          <View style={[styles.themeRow, isHex(bg) && styles.themeRowOff]}>
             {(
               [
                 ['auto', '📱 אוטומטי'],
                 ['light', '☀️ בהיר'],
                 ['dark', '🌙 כהה'],
               ] as [ThemeMode, string][]
-            ).map(([m, label]) => (
-              <TouchableOpacity
-                key={m}
-                style={[styles.themeBtn, themeMode === m && styles.themeBtnOn]}
-                onPress={() => onThemeMode(m)}
-              >
-                <Text style={[styles.themeBtnText, themeMode === m && styles.themeBtnTextOn]}>{label}</Text>
-              </TouchableOpacity>
-            ))}
+            ).map(([m, label]) => {
+              const on = themeMode === m && !isHex(bg);
+              return (
+                <TouchableOpacity
+                  key={m}
+                  style={[styles.themeBtn, on && styles.themeBtnOn]}
+                  onPress={() => {
+                    onThemeMode(m);
+                    if (isHex(bg)) onBg('default'); // back to the plain white / black background
+                  }}
+                >
+                  <Text style={[styles.themeBtnText, on && styles.themeBtnTextOn]}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-          <Text style={styles.subSection}>צבע ראשי</Text>
+          {isHex(bg) ? (
+            <Text style={styles.intro}>הרקע שבחרת קובע אם המסך בהיר או כהה. לחיצה על אחד הכפתורים למעלה מחזירה את הרקע הרגיל.</Text>
+          ) : null}
+
+          <Text style={styles.subSection}>צבע ראשי – כפתורים</Text>
           <View style={styles.accentRow}>
             {ACCENTS.map((a) => {
               const col = c.dark ? a.dark.accent : a.light.accent;
@@ -300,7 +364,87 @@ export default function SetupScreen({
                 </TouchableOpacity>
               );
             })}
+            <TouchableOpacity style={styles.accentItem} onPress={() => setPicker('accent')}>
+              <View style={[styles.accentDot, styles.customDot, isHex(accent) && { backgroundColor: accent }, isHex(accent) && styles.accentDotOn]}>
+                <Text style={[styles.accentCheck, isHex(accent) && { color: c.onAccent }]}>{isHex(accent) ? '✓' : '🎨'}</Text>
+              </View>
+              <Text style={[styles.accentName, isHex(accent) && styles.accentNameOn]}>משלי</Text>
+            </TouchableOpacity>
           </View>
+
+          <Text style={styles.subSection}>צבע משני – רקע</Text>
+          <View style={styles.accentRow}>
+            {BACKGROUNDS.map((b) => {
+              const on = b.key === 'default' ? !isHex(bg) : bg.toUpperCase() === b.key;
+              const col = b.key === 'default' && c.dark && !isHex(bg) ? '#000000' : b.color;
+              return (
+                <TouchableOpacity key={b.key} style={styles.accentItem} onPress={() => onBg(b.key)}>
+                  <View style={[styles.accentDot, { backgroundColor: col }, on && styles.accentDotOn]}>
+                    {on ? <Text style={[styles.accentCheck, { color: paletteFor(false, 'yellow', b.key === 'default' ? undefined : b.key).text }, col === '#000000' && { color: '#FFFFFF' }]}>✓</Text> : null}
+                  </View>
+                  <Text style={[styles.accentName, on && styles.accentNameOn]}>{b.key === 'default' && c.dark && !isHex(bg) ? 'רגיל' : b.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+            {(() => {
+              const mine = isHex(bg) && !BACKGROUNDS.some((b) => b.key === bg.toUpperCase());
+              return (
+                <TouchableOpacity style={styles.accentItem} onPress={() => setPicker('bg')}>
+                  <View style={[styles.accentDot, styles.customDot, mine && { backgroundColor: c.bg }, mine && styles.accentDotOn]}>
+                    <Text style={styles.accentCheck}>{mine ? '✓' : '🎨'}</Text>
+                  </View>
+                  <Text style={[styles.accentName, mine && styles.accentNameOn]}>משלי</Text>
+                </TouchableOpacity>
+              );
+            })()}
+          </View>
+
+          <Text style={styles.subSection}>כך זה ייראה</Text>
+          <View style={styles.sampleBox}>
+            <ThemeSample p={c} />
+          </View>
+          {accentTooClose(c.accent, c.bg) ? (
+            <View style={styles.warnBox}>
+              <Text style={styles.warnText}>⚠️ הכפתורים כמעט באותו צבע כמו הרקע, ולכן לא יבלטו.</Text>
+              <TouchableOpacity style={styles.warnBtn} onPress={() => onAccent(accentFixed(c.accent, c.bg))}>
+                <Text style={styles.warnBtnText}>תקן לגוון בולט</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {accent !== 'yellow' || bg !== 'default' ? (
+            <TouchableOpacity
+              style={styles.resetBtn}
+              onPress={() => {
+                onAccent('yellow');
+                onBg('default');
+              }}
+            >
+              <Text style={styles.resetText}>↺ חזרה לצבעים הרגילים</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <ColorPicker
+            visible={picker === 'accent'}
+            title="בחירת צבע לכפתורים"
+            initial={accentColorFor(accent, c.dark)}
+            preview={(col) => <ThemeSample p={paletteFor(c.dark, col, isHex(bg) ? bg : undefined)} />}
+            onPick={(col) => {
+              onAccent(col);
+              setPicker(null);
+            }}
+            onClose={() => setPicker(null)}
+          />
+          <ColorPicker
+            visible={picker === 'bg'}
+            title="בחירת צבע לרקע"
+            initial={isHex(bg) ? bg : '#EDF7EE'}
+            preview={(col) => <ThemeSample p={paletteFor(c.dark, accent, col)} />}
+            onPick={(col) => {
+              onBg(col);
+              setPicker(null);
+            }}
+            onClose={() => setPicker(null)}
+          />
 
           <Text style={styles.section}>הרשאות לשעון המעורר לפי מיקום</Text>
           <Text style={styles.intro}>
@@ -387,12 +531,12 @@ export default function SetupScreen({
           <Text style={[styles.stepTitle, { marginTop: 10 }]}>☁️ גוגל דרייב</Text>
           {driveBackup.enabled ? (
             <>
-              <Text style={[styles.intro, driveBackup.lastError ? { color: '#D70015' } : null]}>
+              <Text style={[styles.intro, driveBackup.lastError ? { color: c.danger } : null]}>
                 {driveBackup.lastError
                   ? '⚠️ ' + driveBackup.lastError
                   : `✓ פעיל · ${driveBackup.email ?? ''}${stamp(driveBackup.lastAt)}`}
               </Text>
-              <Text style={[styles.intro, driveBackup.files !== false && driveBackup.filesError ? { color: '#D70015' } : null]}>
+              <Text style={[styles.intro, driveBackup.files !== false && driveBackup.filesError ? { color: c.danger } : null]}>
                 {driveBackup.files === false
                   ? '📄 קבצי המסמכים: לא מגובים'
                   : driveFilesProgress
@@ -446,7 +590,7 @@ export default function SetupScreen({
           <Text style={[styles.stepTitle, { marginTop: 14 }]}>📱 תיקייה בטלפון</Text>
           {autoBackup.folderUri ? (
             <>
-              <Text style={[styles.intro, autoBackup.lastError ? { color: '#D70015' } : null]}>
+              <Text style={[styles.intro, autoBackup.lastError ? { color: c.danger } : null]}>
                 {autoBackup.lastError
                   ? '⚠️ ' + autoBackup.lastError
                   : `✓ פעיל · תיקייה: ${autoBackup.folderName ?? ''}${stamp(autoBackup.lastAt)}`}
@@ -632,6 +776,15 @@ const makeStyles = (c: Palette) =>
         justifyContent: 'center',
       },
       themeBtnOn: { backgroundColor: c.accent },
+      themeRowOff: { opacity: 0.6, marginBottom: 6 },
+      customDot: { backgroundColor: c.subtle, borderStyle: 'dashed', borderWidth: 1.5, borderColor: c.muted },
+      sampleBox: { borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: c.border, marginBottom: 10 },
+      warnBox: { backgroundColor: c.warnBg, borderRadius: 14, padding: 12, marginBottom: 10, gap: 8 },
+      warnText: { color: c.warnText, fontSize: 14, fontWeight: '600' },
+      warnBtn: { alignSelf: 'flex-start', backgroundColor: c.primary, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 },
+      warnBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
+      resetBtn: { alignSelf: 'flex-start', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: c.subtle2, marginBottom: 6 },
+      resetText: { color: c.text, fontWeight: '600', fontSize: 14 },
       subSection: { fontSize: 14, fontWeight: '700', color: c.muted, marginTop: 14, marginBottom: 8 },
       accentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
       accentItem: { width: '18%', alignItems: 'center', marginBottom: 8 },

@@ -1123,6 +1123,8 @@ const makeStyles = (c: Palette) => ({
     alignItems: 'center' as const,
     gap: 12,
     backgroundColor: c.card,
+    borderWidth: 1,
+    borderColor: c.cardEdge,
     borderRadius: 16,
     padding: 14,
     marginTop: 10,

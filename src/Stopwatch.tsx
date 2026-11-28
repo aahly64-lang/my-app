@@ -263,7 +263,7 @@ function SavePopup({
       <View style={styles.switchRow}>
         <Text style={styles.switchLabel}>לשמור תאריך ושעה</Text>
         <Switch
-          trackColor={{ false: c.dark ? '#3A3A3C' : '#D1D1D6', true: c.accent }}
+          trackColor={{ false: c.switchOff, true: c.accent }}
           thumbColor="#FFFFFF"
           value={withDate}
           onValueChange={setWithDate}
@@ -600,6 +600,8 @@ const makeStyles = (c: Palette) => ({
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     backgroundColor: c.card,
+    borderWidth: 1,
+    borderColor: c.cardEdge,
     borderRadius: 18,
     padding: 16,
     marginBottom: 10,
@@ -608,10 +610,10 @@ const makeStyles = (c: Palette) => ({
   journalName: { fontSize: 16, fontWeight: '700' as const, color: c.text, marginBottom: 2 },
   chev: { fontSize: 22, color: c.muted },
   statsGrid: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 8, marginBottom: 12 },
-  stat: { width: '31.5%' as const, backgroundColor: c.card, borderRadius: 14, padding: 10, alignItems: 'center' as const },
+  stat: { width: '31.5%' as const, backgroundColor: c.card, borderWidth: 1, borderColor: c.cardEdge, borderRadius: 14, padding: 10, alignItems: 'center' as const },
   statValue: { fontSize: 18, fontWeight: '700' as const, color: c.text, fontVariant: ['tabular-nums' as const] },
   statLabel: { fontSize: 11.5, color: c.muted, marginTop: 2, textAlign: 'center' as const },
-  chartBox: { backgroundColor: c.card, borderRadius: 16, padding: 12, marginBottom: 14 },
+  chartBox: { backgroundColor: c.card, borderWidth: 1, borderColor: c.cardEdge, borderRadius: 16, padding: 12, marginBottom: 14 },
   chartTitle: { fontSize: 12.5, color: c.muted, marginBottom: 8 },
   chart: { height: 110, flexDirection: 'row' as const, alignItems: 'flex-end' as const, gap: 3 },
   barSlot: { flex: 1, height: '100%' as const, justifyContent: 'flex-end' as const },
@@ -621,6 +623,8 @@ const makeStyles = (c: Palette) => ({
     alignItems: 'center' as const,
     gap: 14,
     backgroundColor: c.card,
+    borderWidth: 1,
+    borderColor: c.cardEdge,
     borderRadius: 14,
     paddingVertical: 12,
     paddingHorizontal: 14,

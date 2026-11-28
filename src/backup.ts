@@ -32,6 +32,7 @@ export interface BackupData {
   sounds: SoundSettings;
   themeMode?: string;
   accent?: string;
+  bg?: string;
   journals?: Journal[];
   taskLists?: TaskList[];
   taskTemplates?: TaskTemplate[];
@@ -95,6 +96,7 @@ export function parseBackup(raw: string): BackupData | null {
       sounds: parsed.sounds && typeof parsed.sounds === 'object' ? parsed.sounds : {},
       themeMode: typeof parsed.themeMode === 'string' ? parsed.themeMode : undefined,
       accent: typeof parsed.accent === 'string' ? parsed.accent : undefined,
+      bg: typeof parsed.bg === 'string' ? parsed.bg : undefined,
       journals: Array.isArray(parsed.journals) ? parsed.journals : undefined,
       taskLists: Array.isArray(parsed.taskLists) ? parsed.taskLists : undefined,
       taskTemplates: Array.isArray(parsed.taskTemplates) ? parsed.taskTemplates : undefined,

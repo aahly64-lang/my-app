@@ -314,7 +314,7 @@ export const makeAppStyles = (c: Palette) =>
         borderColor: c.border,
       },
       popupYellow: { backgroundColor: c.noteLight },
-      popupWhite: { backgroundColor: c.card },
+      popupWhite: { backgroundColor: c.card, borderWidth: 1, borderColor: c.cardEdge },
       popupHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
       popupTitle: { fontSize: 19, fontWeight: '700', color: c.noteText },
       headerSaveBtn: { backgroundColor: c.accent, borderRadius: 16, paddingHorizontal: 14, height: 32, justifyContent: 'center' },
@@ -513,7 +513,7 @@ export const makeAppStyles = (c: Palette) =>
         elevation: 10,
       },
       snackbarText: { color: c.onPrimary, fontWeight: '600', fontSize: 14, flex: 1 },
-      snackbarUndo: { color: c.dark ? '#7A5F00' : c.accent, fontWeight: '800', fontSize: 15, marginStart: 12 },
+      snackbarUndo: { color: c.accentOnPrimary, fontWeight: '800', fontSize: 15, marginStart: 12 },
       notesInput: { minHeight: 70, textAlignVertical: 'top' },
       pickerBtnPlain: {
         backgroundColor: c.subtle,

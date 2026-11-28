@@ -285,6 +285,8 @@ const makeStyles = (c: Palette) => ({
     gap: 12,
     padding: 12,
     backgroundColor: c.card,
+    borderBottomWidth: 1,
+    borderColor: c.cardEdge,
     borderBottomWidth: 0.5,
     borderBottomColor: c.border,
   },
