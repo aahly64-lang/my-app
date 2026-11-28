@@ -5,6 +5,12 @@ import java.util.Calendar
 
 /** Israeli holidays (days off) from the Hebrew calendar built into Android – no internet or library. */
 object Holidays {
+  // ICU Hebrew month numbers (Android's API doesn't expose the named constants). Adar I = 5 is always counted.
+  private const val TISHREI = 0
+  private const val NISAN = 7
+  private const val IYAR = 8
+  private const val SIVAN = 9
+
   /** Hebrew name of the holiday on the local day of [at], or "". */
   fun nameAt(at: Long): String {
     return try {
@@ -14,20 +20,20 @@ object Holidays {
       val month = hc.get(android.icu.util.Calendar.MONTH)
       val day = hc.get(android.icu.util.Calendar.DAY_OF_MONTH)
       when (month) {
-        HebrewCalendar.TISHREI -> when (day) {
+        TISHREI -> when (day) {
           1, 2 -> "ראש השנה"
           10 -> "יום כיפור"
           15 -> "סוכות"
           22 -> "שמחת תורה"
           else -> ""
         }
-        HebrewCalendar.NISAN -> when (day) {
+        NISAN -> when (day) {
           15 -> "פסח"
           21 -> "שביעי של פסח"
           else -> ""
         }
-        HebrewCalendar.SIVAN -> if (day == 6) "שבועות" else ""
-        HebrewCalendar.IYAR -> if (day in 3..6 && day == independenceDay(local.get(Calendar.DAY_OF_WEEK), day)) "יום העצמאות" else ""
+        SIVAN -> if (day == 6) "שבועות" else ""
+        IYAR -> if (day in 3..6 && day == independenceDay(local.get(Calendar.DAY_OF_WEEK), day)) "יום העצמאות" else ""
         else -> ""
       }
     } catch (e: Exception) {
