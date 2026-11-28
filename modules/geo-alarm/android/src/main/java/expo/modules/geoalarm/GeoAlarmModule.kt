@@ -421,7 +421,7 @@ class GeoAlarmModule : Module() {
           .setGalleryImportAllowed(true)
           .setPageLimit(pageLimit.coerceIn(1, 30))
           .setResultFormats(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
-          .setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL)
+          .setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_BASE_WITH_FILTER) // FULL mode turned Hebrew pages upside down (its ML auto-rotation); our ScanEnhancer cleans the page anyway
           .build()
         com.google.mlkit.vision.documentscanner.GmsDocumentScanning.getClient(options)
           .getStartScanIntent(activity)
